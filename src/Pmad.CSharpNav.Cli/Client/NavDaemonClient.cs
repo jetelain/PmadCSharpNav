@@ -49,72 +49,93 @@ public sealed class NavDaemonClient : IDisposable
     public async Task<DiscoveryInfo> EnsureDaemonRunningAsync(string solutionPath, CancellationToken ct = default)
     {
         var fullPath = Path.GetFullPath(solutionPath);
-        var hash = NavDiscovery.ComputeSolutionHash(fullPath);
-        var mutexName = OperatingSystem.IsWindows()
-            ? $@"Local\csnav_{hash}"
-            : $"csnav_{hash}";
 
-        using var mutex = new Mutex(false, mutexName);
-        var hasHandle = false;
-
-        try
+        // Fast path: if daemon is already running and healthy, avoid taking the lock
+        var existing = await NavDiscovery.ReadDiscoveryFileAsync(fullPath, ct);
+        if (existing != null &&
+            existing.Version == NavConstants.CurrentContractVersion &&
+            IsProcessAlive(existing.Pid) &&
+            await PingHealthAsync(existing, ct))
         {
+            return existing;
+        }
+
+        // Slow path: acquire cross-process solution lock
+        using var fileLock = await AcquireSolutionLockAsync(fullPath, TimeSpan.FromSeconds(15), ct);
+
+        // Re-check after acquiring the lock in case another process already started the daemon
+        var info = await NavDiscovery.ReadDiscoveryFileAsync(fullPath, ct);
+        if (info != null)
+        {
+            if (info.Version != NavConstants.CurrentContractVersion)
+            {
+                await Console.Error.WriteLineAsync($"[csnav] Daemon contract version mismatch (expected {NavConstants.CurrentContractVersion}, found {info.Version}). Restarting daemon...");
+                await StopDaemonAsync(fullPath, ct);
+                info = null;
+            }
+            else if (IsProcessAlive(info.Pid) && await PingHealthAsync(info, ct))
+            {
+                return info;
+            }
+        }
+
+        // Stale or dead daemon, clean up and start a new one
+        NavDiscovery.DeleteDiscoveryFile(fullPath);
+
+        await Console.Error.WriteLineAsync($"[csnav] Starting background daemon for {Path.GetFileName(fullPath)}...");
+        StartBackgroundServer(fullPath);
+
+        // Poll health endpoint
+        var stopwatch = Stopwatch.StartNew();
+        while (stopwatch.Elapsed < TimeSpan.FromSeconds(20))
+        {
+            await Task.Delay(250, ct);
+
+            info = await NavDiscovery.ReadDiscoveryFileAsync(fullPath, ct);
+            if (info != null && await PingHealthAsync(info, ct))
+            {
+                await Console.Error.WriteLineAsync($"[csnav] Daemon ready on port {info.Port}.");
+                return info;
+            }
+        }
+
+        throw new TimeoutException("Failed to communicate with csnav daemon within 20 seconds.");
+    }
+
+    private static async Task<IDisposable> AcquireSolutionLockAsync(string solutionPath, TimeSpan timeout, CancellationToken ct)
+    {
+        var lockFilePath = NavDiscovery.GetLockFilePath(solutionPath);
+        var stopwatch = Stopwatch.StartNew();
+
+        while (true)
+        {
+            ct.ThrowIfCancellationRequested();
+
             try
             {
-                hasHandle = mutex.WaitOne(15000);
+                return new FileStream(
+                    lockFilePath,
+                    FileMode.OpenOrCreate,
+                    FileAccess.ReadWrite,
+                    FileShare.None,
+                    bufferSize: 1,
+                    FileOptions.None);
             }
-            catch (AbandonedMutexException)
+            catch (IOException)
             {
-                hasHandle = true;
+                // File is locked by another process
             }
-
-            var info = await NavDiscovery.ReadDiscoveryFileAsync(fullPath, ct);
-            if (info != null)
+            catch (UnauthorizedAccessException)
             {
-                if (info.Version != NavConstants.CurrentContractVersion)
-                {
-                    await Console.Error.WriteLineAsync($"[csnav] Daemon contract version mismatch (expected {NavConstants.CurrentContractVersion}, found {info.Version}). Restarting daemon...");
-                    await StopDaemonAsync(fullPath, ct);
-                    info = null;
-                }
-                else if (IsProcessAlive(info.Pid))
-                {
-                    // Verify health
-                    if (await PingHealthAsync(info, ct))
-                    {
-                        return info;
-                    }
-                }
+                // File sharing conflict or lock transition
             }
 
-            // Stale or dead daemon, clean up and start a new one
-            NavDiscovery.DeleteDiscoveryFile(fullPath);
-
-            await Console.Error.WriteLineAsync($"[csnav] Starting background daemon for {Path.GetFileName(fullPath)}...");
-            StartBackgroundServer(fullPath);
-
-            // Poll health endpoint
-            var stopwatch = Stopwatch.StartNew();
-            while (stopwatch.Elapsed < TimeSpan.FromSeconds(20))
+            if (stopwatch.Elapsed >= timeout)
             {
-                await Task.Delay(250, ct);
-
-                info = await NavDiscovery.ReadDiscoveryFileAsync(fullPath, ct);
-                if (info != null && await PingHealthAsync(info, ct))
-                {
-                    await Console.Error.WriteLineAsync($"[csnav] Daemon ready on port {info.Port}.");
-                    return info;
-                }
+                throw new TimeoutException($"Failed to acquire daemon startup lock for {solutionPath} within {timeout.TotalSeconds} seconds.");
             }
 
-            throw new TimeoutException("Failed to communicate with csnav daemon within 20 seconds.");
-        }
-        finally
-        {
-            if (hasHandle)
-            {
-                mutex.ReleaseMutex();
-            }
+            await Task.Delay(50, ct);
         }
     }
 

@@ -178,6 +178,6 @@ csnav server stop
 When a query is issued:
 1. `csnav` computes a SHA-256 hash of the normalized solution path.
 2. It looks for a discovery file in `%LOCALAPPDATA%/PmadCSharpNav/servers/<hash>.json`.
-3. If no healthy daemon is found, the CLI acquires an OS-level named mutex (`Local\csnav_<hash>`), spawns `Pmad.CSharpNav.Server` in the background, and polls `/api/health` until ready.
+3. If no healthy daemon is found, the CLI acquires a per-solution lock (`<hash>.lock`), spawns `Pmad.CSharpNav.Server` in the background, and polls `/api/health` until ready.
 4. Each daemon generates a cryptographic bearer token saved with restricted permissions in the discovery file.
 5. Inactivity triggers automatic shutdown after 30 minutes of idle time.

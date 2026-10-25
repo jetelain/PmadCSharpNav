@@ -63,6 +63,12 @@ public static class NavDiscovery
         return Path.Combine(GetServersDirectory(), $"{hash}.json");
     }
 
+    public static string GetLockFilePath(string solutionPath)
+    {
+        var hash = ComputeSolutionHash(solutionPath);
+        return Path.Combine(GetServersDirectory(), $"{hash}.lock");
+    }
+
     public static string GetLogFilePath(string solutionPath)
     {
         var hash = ComputeSolutionHash(solutionPath);

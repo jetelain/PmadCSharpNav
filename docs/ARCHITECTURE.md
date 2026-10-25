@@ -407,7 +407,7 @@ graph LR
     ```
 * **Auto-Start**:
   - When `csnav` CLI is executed, it reads the discovery file.
-  - If the server is unreachable or not running, the CLI takes a per-solution lock (named mutex / lock file) so concurrent invocations start only one daemon, removes a stale discovery file (dead PID), spawns `csnav server start --solution <path>` as a detached process, polls `/api/health` for readiness, and processes the request.
+  - If the server is unreachable or not running, the CLI takes a per-solution lock file (`<hash>.lock`) so concurrent invocations start only one daemon, removes a stale discovery file (dead PID), spawns `csnav server start --solution <path>` as a detached process, polls `/api/health` for readiness, and processes the request.
   - `/api/health` answers as soon as the host is up, even while the workspace is still loading (`"state": "loading"`). Queries issued during loading wait up to a bounded timeout, then fail with `WORKSPACE_LOADING`.
 * **Auto-Termination**:
   - The server tracks the timestamp of the last incoming query.
