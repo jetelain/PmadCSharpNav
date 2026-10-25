@@ -287,11 +287,23 @@ public sealed class NavDaemonClient : IDisposable
     private static void StartBackgroundServer(string solutionPath)
     {
         var serverAssembly = FindServerAssembly();
+        var dotnetHost = FindDotNetHost();
+        var arguments = $"\"{serverAssembly}\" --solution \"{solutionPath}\"";
+
+        if (OperatingSystem.IsWindows())
+        {
+            var commandLine = $"\"{dotnetHost}\" {arguments}";
+            var workingDir = Path.GetDirectoryName(solutionPath);
+            if (WindowsProcessLauncher.TryStartViaWmi(commandLine, workingDir))
+            {
+                return;
+            }
+        }
 
         var psi = new ProcessStartInfo
         {
-            FileName = "dotnet",
-            Arguments = $"\"{serverAssembly}\" --solution \"{solutionPath}\"",
+            FileName = dotnetHost,
+            Arguments = arguments,
             UseShellExecute = false,
             CreateNoWindow = true,
             WindowStyle = ProcessWindowStyle.Hidden,
@@ -300,6 +312,24 @@ public sealed class NavDaemonClient : IDisposable
         };
 
         Process.Start(psi);
+    }
+
+    private static string FindDotNetHost()
+    {
+        var dotnetRoot = Environment.GetEnvironmentVariable("DOTNET_ROOT");
+        if (!string.IsNullOrEmpty(dotnetRoot))
+        {
+            var candidate = Path.Combine(dotnetRoot, OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet");
+            if (File.Exists(candidate)) return candidate;
+        }
+
+        if (OperatingSystem.IsWindows())
+        {
+            var defaultLocation = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "dotnet", "dotnet.exe");
+            if (File.Exists(defaultLocation)) return defaultLocation;
+        }
+
+        return "dotnet";
     }
 
     private static string FindServerAssembly()

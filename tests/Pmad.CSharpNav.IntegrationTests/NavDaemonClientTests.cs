@@ -49,6 +49,18 @@ public sealed class NavDaemonClientTests : IDisposable
         running.Should().BeNull(); // Port 12345 is not listening, so health check fails cleanly without throwing
     }
 
+    [Fact]
+    public void WindowsProcessLauncher_OnWindows_CanSpawnProcessViaWmi()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var success = WindowsProcessLauncher.TryStartViaWmi("powershell.exe -NoProfile -Command Start-Sleep -Milliseconds 100");
+        success.Should().BeTrue();
+    }
+
     public void Dispose()
     {
         try
