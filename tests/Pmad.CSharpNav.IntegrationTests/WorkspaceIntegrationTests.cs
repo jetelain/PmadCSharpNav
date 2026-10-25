@@ -84,6 +84,66 @@ public sealed class WorkspaceIntegrationTests : IAsyncLifetime, IDisposable
     }
 
     [Fact]
+    public async Task SearchApi_Finds_External_Dependency_Referenced_In_Non_First_Project()
+    {
+        var searchEngine = new RoslynApiSearchEngine();
+        var handler = new SearchApiHandler(_workspace, searchEngine);
+
+        var request = new SearchApiRequest(
+            Pattern: "DecompilerException",
+            Scope: "all",
+            Kind: "class",
+            Limit: 10);
+
+        var response = await handler.HandleAsync(request);
+
+        response.Should().NotBeNull();
+        response.Results.Should().Contain(r =>
+            r.Name.Contains("DecompilerException", StringComparison.OrdinalIgnoreCase) &&
+            r.Assembly == "ICSharpCode.Decompiler" &&
+            r.IsExternal &&
+            !string.IsNullOrWhiteSpace(r.Summary));
+    }
+
+    [Fact]
+    public async Task ExploreType_Loads_Xml_Documentation_For_External_Type()
+    {
+        var explorer = new RoslynTypeExplorer();
+        var handler = new ExploreTypeHandler(_workspace, explorer);
+
+        var request = new ExploreTypeRequest(
+            Type: "DecompilerException",
+            NoInherited: true);
+
+        var response = await handler.HandleAsync(request);
+
+        response.Should().NotBeNull();
+        response.Type.Name.Should().Be("DecompilerException");
+        response.Type.Summary.Should().NotBeNullOrWhiteSpace();
+        response.Type.Summary.Should().Contain("DecompilerException");
+    }
+
+    [Fact]
+    public async Task SearchApi_Finds_External_Dependency_With_Assembly_Scope()
+    {
+        var searchEngine = new RoslynApiSearchEngine();
+        var handler = new SearchApiHandler(_workspace, searchEngine);
+
+        var request = new SearchApiRequest(
+            Pattern: "DecompilerException",
+            Scope: "ICSharpCode.Decompiler",
+            Kind: "class",
+            Limit: 10);
+
+        var response = await handler.HandleAsync(request);
+
+        response.Should().NotBeNull();
+        response.Results.Should().Contain(r =>
+            r.Name.Contains("DecompilerException", StringComparison.OrdinalIgnoreCase) &&
+            r.Assembly == "ICSharpCode.Decompiler");
+    }
+
+    [Fact]
     public async Task ExploreType_Inspects_Members_And_Structure()
     {
         var explorer = new RoslynTypeExplorer();

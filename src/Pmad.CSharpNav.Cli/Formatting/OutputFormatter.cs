@@ -6,8 +6,9 @@ namespace Pmad.CSharpNav.Cli.Formatting;
 
 public static class OutputFormatter
 {
-    public static string FormatReferences(FindReferencesResponse res, string format)
+    public static string FormatReferences(FindReferencesResponse res, string? format = null)
     {
+        if (string.IsNullOrWhiteSpace(format)) format = "markdown";
         if (format.Equals("json", StringComparison.OrdinalIgnoreCase))
         {
             return NavJsonSerializer.Serialize(res);
@@ -47,8 +48,9 @@ public static class OutputFormatter
         return sb.ToString().TrimEnd();
     }
 
-    public static string FormatApiSearch(SearchApiResponse res, string format)
+    public static string FormatApiSearch(SearchApiResponse res, string? format = null)
     {
+        if (string.IsNullOrWhiteSpace(format)) format = "markdown";
         if (format.Equals("json", StringComparison.OrdinalIgnoreCase))
         {
             return NavJsonSerializer.Serialize(res);
@@ -84,8 +86,9 @@ public static class OutputFormatter
         return sb.ToString().TrimEnd();
     }
 
-    public static string FormatExplore(ExploreTypeResponse res, string format)
+    public static string FormatExplore(ExploreTypeResponse res, string? format = null)
     {
+        if (string.IsNullOrWhiteSpace(format)) format = "markdown";
         if (format.Equals("json", StringComparison.OrdinalIgnoreCase))
         {
             return NavJsonSerializer.Serialize(res);
@@ -128,8 +131,9 @@ public static class OutputFormatter
         return sb.ToString().TrimEnd();
     }
 
-    public static string FormatDecompile(DecompileResponse res, string format)
+    public static string FormatDecompile(DecompileResponse res, string? format = null)
     {
+        if (string.IsNullOrWhiteSpace(format)) format = "markdown";
         if (format.Equals("json", StringComparison.OrdinalIgnoreCase))
         {
             return NavJsonSerializer.Serialize(res);

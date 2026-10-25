@@ -44,6 +44,11 @@ public sealed class ILSpyDecompiler : IAssemblyDecompiler
                 var doc = roslynSnapshot.Solution.GetDocument(docId);
                 if (doc != null)
                 {
+                    var docCompilation = await roslynSnapshot.GetCompilationAsync(doc.Project.Id, ct);
+                    if (docCompilation != null)
+                    {
+                        compilation = docCompilation;
+                    }
                     var sourceText = await doc.GetTextAsync(ct);
                     if (criteria.Line.Value < 1 || criteria.Line.Value > sourceText.Lines.Count)
                     {
@@ -104,6 +109,36 @@ public sealed class ILSpyDecompiler : IAssemblyDecompiler
         if (assemblyPath == null && !string.IsNullOrWhiteSpace(criteria.Assembly))
         {
             assemblyPath = ResolveAssemblyPathByName(compilation, criteria.Assembly);
+        }
+
+        // Check other projects in the solution if not found in preferred project
+        if (assemblyPath == null && (!string.IsNullOrWhiteSpace(targetTypeName) || !string.IsNullOrWhiteSpace(criteria.Assembly)))
+        {
+            foreach (var proj in roslynSnapshot.Solution.Projects)
+            {
+                if (proj.Id == preferredProject.Id) continue;
+                var projCompilation = await roslynSnapshot.GetCompilationAsync(proj.Id, ct);
+                if (projCompilation == null) continue;
+
+                if (assemblyPath == null && !string.IsNullOrWhiteSpace(targetTypeName))
+                {
+                    var cleanTypeName = NormalizeTypeNameForMetadata(targetTypeName);
+                    var typeSymbol = projCompilation.GetTypeByMetadataName(cleanTypeName)
+                        ?? projCompilation.GetTypeByMetadataName(targetTypeName);
+
+                    if (typeSymbol != null)
+                    {
+                        assemblyPath = ResolveAssemblyPath(projCompilation, typeSymbol.ContainingAssembly);
+                    }
+                }
+
+                if (assemblyPath == null && !string.IsNullOrWhiteSpace(criteria.Assembly))
+                {
+                    assemblyPath = ResolveAssemblyPathByName(projCompilation, criteria.Assembly);
+                }
+
+                if (assemblyPath != null) break;
+            }
         }
 
         // Fallback: check shared runtime directory for BCL assemblies

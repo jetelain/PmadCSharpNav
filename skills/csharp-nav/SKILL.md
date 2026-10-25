@@ -39,7 +39,7 @@ csnav refs --symbol "Order" --project "MyApp.Core" --format json
 - `--exclude-tests`: Excludes usages in test projects (matches `*.Tests`, `*.Test`, etc.).
 - `--project <name>`: Restrict references to a single project.
 - `--limit <int>`: Max results (default `100`).
-- `--format <json|markdown|text>`: Output format (default `text`).
+- `--format <markdown|json|text>`: Output format (default `markdown`).
 
 ---
 

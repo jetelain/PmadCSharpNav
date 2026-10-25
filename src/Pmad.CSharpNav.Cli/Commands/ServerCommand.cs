@@ -15,7 +15,7 @@ public static class ServerCommand
         statusCmd.SetAction(async (parseResult, ct) =>
         {
             var specifiedSolution = parseResult.GetValue(globals.SolutionOption);
-            var format = parseResult.GetValue(globals.FormatOption) ?? "text";
+            var format = parseResult.GetValue(globals.FormatOption) ?? "markdown";
 
             try
             {
@@ -27,6 +27,10 @@ public static class ServerCommand
                     if (format.Equals("json", StringComparison.OrdinalIgnoreCase))
                     {
                         Console.WriteLine("{\"status\":\"stopped\"}");
+                    }
+                    else if (format.Equals("markdown", StringComparison.OrdinalIgnoreCase))
+                    {
+                        Console.WriteLine(string.Format(CultureInfo.InvariantCulture, "Server is not running for: `{0}`", solutionPath));
                     }
                     else
                     {
@@ -40,6 +44,14 @@ public static class ServerCommand
                 if (format.Equals("json", StringComparison.OrdinalIgnoreCase))
                 {
                     Console.WriteLine(NavJsonSerializer.Serialize(status));
+                }
+                else if (format.Equals("markdown", StringComparison.OrdinalIgnoreCase))
+                {
+                    Console.WriteLine(string.Format(CultureInfo.InvariantCulture, "### Server Status: Running (PID: {0}, Port: {1})", running.Pid, running.Port));
+                    Console.WriteLine(string.Format(CultureInfo.InvariantCulture, "- **Solution:** `{0}`", status.SolutionPath));
+                    Console.WriteLine(string.Format(CultureInfo.InvariantCulture, "- **Projects:** {0}", status.ProjectCount));
+                    Console.WriteLine(string.Format(CultureInfo.InvariantCulture, "- **Memory:** {0:F1} MB", status.MemoryUsageBytes / (1024.0 * 1024.0)));
+                    Console.WriteLine(string.Format(CultureInfo.InvariantCulture, "- **State:** {0}", status.State));
                 }
                 else
                 {

@@ -50,7 +50,7 @@ public static class RefsCommand
 
             var specifiedSolution = parseResult.GetValue(globals.SolutionOption);
             var framework = parseResult.GetValue(globals.FrameworkOption);
-            var format = parseResult.GetValue(globals.FormatOption) ?? "json";
+            var format = parseResult.GetValue(globals.FormatOption) ?? "markdown";
 
             if (string.IsNullOrWhiteSpace(symbol) && string.IsNullOrWhiteSpace(file))
             {

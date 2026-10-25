@@ -40,8 +40,13 @@ public sealed class RoslynApiSearchEngine : IApiSearchEngine
         var roslynSnapshot = (RoslynWorkspaceSnapshot)snapshot;
         var results = new List<ApiDefinition>();
 
-        var searchSource = criteria.Scope is "all" or "source" or "solution";
-        var searchExternal = criteria.Scope is "all" or "dependencies";
+        var isAll = string.Equals(criteria.Scope, "all", StringComparison.OrdinalIgnoreCase);
+        var isSourceOnly = string.Equals(criteria.Scope, "source", StringComparison.OrdinalIgnoreCase) ||
+                           string.Equals(criteria.Scope, "solution", StringComparison.OrdinalIgnoreCase);
+        var isDependenciesOnly = string.Equals(criteria.Scope, "dependencies", StringComparison.OrdinalIgnoreCase);
+
+        var searchSource = isAll || isSourceOnly || (!isDependenciesOnly);
+        var searchExternal = isAll || isDependenciesOnly || (!isSourceOnly);
 
         Regex? patternRegex = null;
         if (!string.IsNullOrWhiteSpace(criteria.Pattern) && (criteria.Pattern.Contains('*') || criteria.Pattern.Contains('?')))
@@ -55,6 +60,13 @@ public sealed class RoslynApiSearchEngine : IApiSearchEngine
         {
             foreach (var project in roslynSnapshot.Solution.Projects)
             {
+                if (!isAll && !isSourceOnly &&
+                    !string.Equals(project.Name, criteria.Scope, StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(project.AssemblyName, criteria.Scope, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
                 var declarations = await SymbolFinder.FindSourceDeclarationsAsync(
                     project,
                     name => MatchesPattern(name, criteria.Pattern, patternRegex),
@@ -75,23 +87,38 @@ public sealed class RoslynApiSearchEngine : IApiSearchEngine
             }
         }
 
-        // 2. Search external referenced libraries
+        // 2. Search external referenced libraries across all solution projects
         if (searchExternal)
         {
-            var preferredProject = roslynSnapshot.GetPreferredProject(targetFramework: criteria.Framework);
-            if (preferredProject != null)
+            var projects = roslynSnapshot.Solution.Projects.ToList();
+            if (!string.IsNullOrWhiteSpace(criteria.Framework))
             {
-                var compilation = await roslynSnapshot.GetCompilationAsync(preferredProject.Id, ct);
-                if (compilation != null)
+                var filtered = projects.Where(p =>
+                    p.Name.Contains(criteria.Framework, StringComparison.OrdinalIgnoreCase) ||
+                    (p.OutputFilePath != null && p.OutputFilePath.Contains(criteria.Framework, StringComparison.OrdinalIgnoreCase))).ToList();
+                if (filtered.Count > 0)
                 {
-                    var externalSymbols = await GetExternalApiDefinitionsAsync(compilation, criteria.Scope, ct);
+                    projects = filtered;
+                }
+            }
 
-                    foreach (var api in externalSymbols)
+            var projectAssemblyNames = new HashSet<string>(
+                roslynSnapshot.Solution.Projects.Select(p => p.AssemblyName),
+                StringComparer.OrdinalIgnoreCase);
+            var seenAssemblies = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var project in projects)
+            {
+                var compilation = await roslynSnapshot.GetCompilationAsync(project.Id, ct);
+                if (compilation == null) continue;
+
+                var externalSymbols = await GetExternalApiDefinitionsAsync(compilation, criteria.Scope, projectAssemblyNames, seenAssemblies, ct);
+
+                foreach (var api in externalSymbols)
+                {
+                    if (MatchesCriteria(api, criteria, patternRegex) && MatchesDoc(api.Summary, criteria.DocText))
                     {
-                        if (MatchesCriteria(api, criteria, patternRegex) && MatchesDoc(api.Summary, criteria.DocText))
-                        {
-                            results.Add(api);
-                        }
+                        results.Add(api);
                     }
                 }
             }
@@ -103,6 +130,8 @@ public sealed class RoslynApiSearchEngine : IApiSearchEngine
     private async Task<List<ApiDefinition>> GetExternalApiDefinitionsAsync(
         Compilation compilation,
         string scope,
+        HashSet<string> projectAssemblyNames,
+        HashSet<string> seenAssemblies,
         CancellationToken ct)
     {
         var allExternal = new List<ApiDefinition>();
@@ -114,17 +143,28 @@ public sealed class RoslynApiSearchEngine : IApiSearchEngine
             var asmSymbol = compilation.GetAssemblyOrModuleSymbol(reference) as IAssemblySymbol;
             if (asmSymbol == null) continue;
 
-            if (scope is not "all" and not "dependencies" &&
+            if (projectAssemblyNames.Contains(asmSymbol.Name))
+            {
+                continue;
+            }
+
+            if (!string.Equals(scope, "all", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(scope, "dependencies", StringComparison.OrdinalIgnoreCase) &&
                 !string.Equals(asmSymbol.Name, scope, StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
 
             var asmName = asmSymbol.Name;
+            if (!seenAssemblies.Add(asmName))
+            {
+                continue;
+            }
+
             var mvid = asmSymbol.Identity.ToString();
             var hashBytes = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(mvid));
             var hash = Convert.ToHexString(hashBytes)[..16].ToLowerInvariant();
-            var cacheFile = Path.Combine(_cacheDirectory, $"{SanitizeFileName(asmName)}_{hash}.json");
+            var cacheFile = Path.Combine(_cacheDirectory, $"{SanitizeFileName(asmName)}_v2_{hash}.json");
 
             if (_assemblyCache.TryGetValue(asmName, out var cached))
             {
@@ -188,29 +228,41 @@ public sealed class RoslynApiSearchEngine : IApiSearchEngine
 
             foreach (var type in ns.GetTypeMembers())
             {
-                if (type.DeclaredAccessibility != Microsoft.CodeAnalysis.Accessibility.Public)
-                {
-                    continue;
-                }
-
-                var typeSummary = RoslynTypeExplorer.ExtractXmlSummary(type.GetDocumentationCommentXml());
-                list.Add(MapSymbolToApiDefinition(type, assembly.Name, isExternal: true, typeSummary));
-
-                foreach (var member in type.GetMembers())
-                {
-                    if (member.DeclaredAccessibility != Microsoft.CodeAnalysis.Accessibility.Public ||
-                        member.IsImplicitlyDeclared)
-                    {
-                        continue;
-                    }
-
-                    var memberSummary = RoslynTypeExplorer.ExtractXmlSummary(member.GetDocumentationCommentXml());
-                    list.Add(MapSymbolToApiDefinition(member, assembly.Name, isExternal: true, memberSummary));
-                }
+                ScanType(type, assembly.Name, list);
             }
         }
 
         return list;
+    }
+
+    private static void ScanType(INamedTypeSymbol type, string assemblyName, List<ApiDefinition> list)
+    {
+        if (type.DeclaredAccessibility != Microsoft.CodeAnalysis.Accessibility.Public)
+        {
+            return;
+        }
+
+        var typeSummary = RoslynTypeExplorer.ExtractXmlSummary(type.GetDocumentationCommentXml());
+        list.Add(MapSymbolToApiDefinition(type, assemblyName, isExternal: true, typeSummary));
+
+        foreach (var member in type.GetMembers())
+        {
+            if (member.DeclaredAccessibility != Microsoft.CodeAnalysis.Accessibility.Public ||
+                member.IsImplicitlyDeclared)
+            {
+                continue;
+            }
+
+            if (member is INamedTypeSymbol nestedType)
+            {
+                ScanType(nestedType, assemblyName, list);
+            }
+            else
+            {
+                var memberSummary = RoslynTypeExplorer.ExtractXmlSummary(member.GetDocumentationCommentXml());
+                list.Add(MapSymbolToApiDefinition(member, assemblyName, isExternal: true, memberSummary));
+            }
+        }
     }
 
     private static bool MatchesPattern(string name, string? pattern, Regex? regex)

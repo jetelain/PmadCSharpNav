@@ -97,7 +97,7 @@ csnav skills show
 All commands support the following options:
 - `-s, --solution <path>`: Path to `.slnx`, `.sln`, `.csproj`, or directory (auto-detected by walking up parent directories if omitted).
 - `-f, --framework <tfm>`: Target framework filter (e.g. `net10.0`) when multi-targeting.
-- `--format <format>`: Output format: `text` (default), `json`, or `markdown`.
+- `--format <format>`: Output format: `markdown` (default), `json`, or `text`.
 
 ---
 

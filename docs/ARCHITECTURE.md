@@ -484,11 +484,12 @@ csnav server reload   # force a full re-open of the solution
 ### Global Options
 - `--solution <path>`: target solution (default: nearest `.sln`/`.slnx` upward from the current directory).
 - `--framework <tfm>`: target framework for multi-targeting solutions (section 8).
-- `--format json|text|markdown`.
+- `--format markdown|json|text`.
 
 ### Output Formatting
-- `--format json` (default for agents): Compact JSON written to `stdout`.
-- `--format text` / `--format markdown`: Human-readable tables and colored output.
+- `--format markdown` (default): Human-readable tables and clean code blocks, optimized for developers and agents.
+- `--format json`: Compact JSON written to `stdout`.
+- `--format text`: Plain text output.
 - All diagnostics, loading spinners, and logs are strictly sent to `stderr`.
 
 ---

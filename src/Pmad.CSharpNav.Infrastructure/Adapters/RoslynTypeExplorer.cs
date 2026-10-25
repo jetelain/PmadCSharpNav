@@ -54,17 +54,28 @@ public sealed class RoslynTypeExplorer : ITypeExplorer
             if (foundType != null) break;
         }
 
-        // If not found in source, search external referenced assemblies
+        // If not found in source, search external referenced assemblies across all projects
         if (foundType == null)
         {
-            var preferredProject = roslynSnapshot.GetPreferredProject(targetFramework: options.Framework);
-            if (preferredProject != null)
+            var projects = roslynSnapshot.Solution.Projects.ToList();
+            if (!string.IsNullOrWhiteSpace(options.Framework))
             {
-                var compilation = await roslynSnapshot.GetCompilationAsync(preferredProject.Id, ct);
-                if (compilation != null)
+                var filtered = projects.Where(p =>
+                    p.Name.Contains(options.Framework, StringComparison.OrdinalIgnoreCase) ||
+                    (p.OutputFilePath != null && p.OutputFilePath.Contains(options.Framework, StringComparison.OrdinalIgnoreCase))).ToList();
+                if (filtered.Count > 0)
                 {
-                    foundType = FindExternalType(compilation, typeName);
+                    projects = filtered;
                 }
+            }
+
+            foreach (var project in projects)
+            {
+                var compilation = await roslynSnapshot.GetCompilationAsync(project.Id, ct);
+                if (compilation == null) continue;
+
+                foundType = FindExternalType(compilation, typeName);
+                if (foundType != null) break;
             }
         }
 
@@ -407,7 +418,8 @@ public sealed class RoslynTypeExplorer : ITypeExplorer
         try
         {
             var element = XElement.Parse($"<root>{xmlDoc}</root>");
-            var summary = element.Element("summary")?.Value;
+            var target = element.DescendantsAndSelf("member").FirstOrDefault() ?? element;
+            var summary = target.Element("summary")?.Value;
             if (summary != null)
             {
                 return string.Join(" ", summary.Split(SummarySplitChars, StringSplitOptions.RemoveEmptyEntries)).Trim();
@@ -428,15 +440,16 @@ public sealed class RoslynTypeExplorer : ITypeExplorer
         try
         {
             var element = XElement.Parse($"<root>{xmlDoc}</root>");
+            var target = element.DescendantsAndSelf("member").FirstOrDefault() ?? element;
             var parts = new List<string>();
 
-            var summary = element.Element("summary")?.Value;
+            var summary = target.Element("summary")?.Value;
             if (!string.IsNullOrWhiteSpace(summary))
             {
                 parts.Add(string.Join(" ", summary.Split(SummarySplitChars, StringSplitOptions.RemoveEmptyEntries)).Trim());
             }
 
-            foreach (var param in element.Elements("param"))
+            foreach (var param in target.Elements("param"))
             {
                 var val = param.Value;
                 if (!string.IsNullOrWhiteSpace(val))
@@ -445,13 +458,13 @@ public sealed class RoslynTypeExplorer : ITypeExplorer
                 }
             }
 
-            var returns = element.Element("returns")?.Value;
+            var returns = target.Element("returns")?.Value;
             if (!string.IsNullOrWhiteSpace(returns))
             {
                 parts.Add(string.Join(" ", returns.Split(SummarySplitChars, StringSplitOptions.RemoveEmptyEntries)).Trim());
             }
 
-            var remarks = element.Element("remarks")?.Value;
+            var remarks = target.Element("remarks")?.Value;
             if (!string.IsNullOrWhiteSpace(remarks))
             {
                 parts.Add(string.Join(" ", remarks.Split(SummarySplitChars, StringSplitOptions.RemoveEmptyEntries)).Trim());

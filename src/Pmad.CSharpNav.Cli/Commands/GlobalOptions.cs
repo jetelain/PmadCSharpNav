@@ -18,8 +18,8 @@ public sealed class GlobalOptions
 
     public Option<string> FormatOption { get; } = new("--format")
     {
-        Description = "Output format: json (default), text, or markdown",
-        DefaultValueFactory = _ => "json",
+        Description = "Output format: markdown (default), json, or text",
+        DefaultValueFactory = _ => "markdown",
         Recursive = true
     };
 

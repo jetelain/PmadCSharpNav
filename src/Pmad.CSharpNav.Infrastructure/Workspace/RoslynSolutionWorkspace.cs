@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.MSBuild;
@@ -232,6 +233,7 @@ public sealed class RoslynSolutionWorkspace : ISolutionWorkspace, IDisposable
         {
             throw new NotSupportedException($"Target path extension '{ext}' is not supported. Use .sln, .slnx, or .csproj.");
         }
+        solution = AttachXmlDocumentationProviders(solution);
 
         _workspace = newWorkspace;
 
@@ -240,6 +242,76 @@ public sealed class RoslynSolutionWorkspace : ISolutionWorkspace, IDisposable
         Volatile.Write(ref _currentSnapshot, newSnapshot);
 
         oldWorkspace?.Dispose();
+    }
+
+    private static readonly ConcurrentDictionary<string, XmlDocumentationProvider> _docProviderCache = new(StringComparer.OrdinalIgnoreCase);
+
+    public static Solution AttachXmlDocumentationProviders(Solution solution)
+    {
+        foreach (var project in solution.Projects)
+        {
+            var newReferences = new List<MetadataReference>();
+            var modified = false;
+
+            foreach (var reference in project.MetadataReferences)
+            {
+                if (reference is PortableExecutableReference peRef &&
+                    !string.IsNullOrWhiteSpace(peRef.FilePath))
+                {
+                    var docProvider = GetDocumentationProvider(peRef.FilePath);
+                    if (docProvider != null)
+                    {
+                        var newRef = MetadataReference.CreateFromFile(peRef.FilePath, peRef.Properties, docProvider);
+                        newReferences.Add(newRef);
+                        modified = true;
+                        continue;
+                    }
+                }
+
+                newReferences.Add(reference);
+            }
+
+            if (modified)
+            {
+                solution = solution.WithProjectMetadataReferences(project.Id, newReferences);
+            }
+        }
+
+        return solution;
+    }
+
+    private static XmlDocumentationProvider? GetDocumentationProvider(string dllPath)
+    {
+        try
+        {
+            var xmlPath = Path.ChangeExtension(dllPath, ".xml");
+            if (!File.Exists(xmlPath))
+            {
+                var dir = Path.GetDirectoryName(dllPath);
+                if (dir != null)
+                {
+                    var enXml = Path.Combine(dir, "en", Path.GetFileNameWithoutExtension(dllPath) + ".xml");
+                    if (File.Exists(enXml))
+                    {
+                        xmlPath = enXml;
+                    }
+                    else
+                    {
+                        return null;
+                    }
+                }
+                else
+                {
+                    return null;
+                }
+            }
+
+            return _docProviderCache.GetOrAdd(xmlPath, p => XmlDocumentationProvider.CreateFromFile(p));
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static Project? FindOwningProject(Solution solution, string filePath)
