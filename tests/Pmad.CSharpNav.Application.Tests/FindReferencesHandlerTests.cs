@@ -79,4 +79,19 @@ public class FindReferencesHandlerTests
         response.References.Should().HaveCount(4);
         response.References[0].File.Should().Be("src/File4.cs");
     }
+
+    [Fact]
+    public async Task HandleAsync_MapsTargetKind_AndStaleFlag()
+    {
+        var handler = new FindReferencesHandler(_workspace, _finder);
+        ((FakeWorkspaceSnapshot)_workspace.Snapshot).IsStale = true;
+
+        var targetSym = new SymbolIdentifier("Asm", "Ns", "OrderService", "OrderService()", "sym-1");
+        _finder.NameResolutionResults.Add(new SymbolResolutionResult(targetSym, "src/OrderService.cs", 10, SymbolKind.Constructor));
+
+        var response = await handler.HandleAsync(new FindReferencesRequest(Symbol: "OrderService..ctor"));
+
+        response.Target.Kind.Should().Be("Constructor");
+        response.Stale.Should().BeTrue();
+    }
 }

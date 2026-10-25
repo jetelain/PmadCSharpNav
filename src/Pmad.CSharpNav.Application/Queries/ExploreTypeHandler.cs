@@ -70,28 +70,35 @@ public sealed class ExploreTypeHandler
             Interfaces: result.Interfaces,
             Summary: result.Summary);
 
+        var limit = Math.Clamp(request.Limit, 1, NavConstants.MaxLimit);
+        var offset = Math.Max(0, request.Offset);
+        var totalMembers = result.Members.Count;
+        var pagedMembers = result.Members.Skip(offset).Take(limit).ToList();
+        var truncated = (offset + pagedMembers.Count) < totalMembers;
+        var nextOffset = truncated ? offset + pagedMembers.Count : (int?)null;
+
         // Group members by kind
-        var constructors = result.Members
+        var constructors = pagedMembers
             .Where(m => m.Kind == SymbolKind.Constructor)
             .Select(MapMember)
             .ToList();
 
-        var properties = result.Members
+        var properties = pagedMembers
             .Where(m => m.Kind == SymbolKind.Property)
             .Select(MapMember)
             .ToList();
 
-        var methods = result.Members
+        var methods = pagedMembers
             .Where(m => m.Kind == SymbolKind.Method)
             .Select(MapMember)
             .ToList();
 
-        var fields = result.Members
+        var fields = pagedMembers
             .Where(m => m.Kind == SymbolKind.Field)
             .Select(MapMember)
             .ToList();
 
-        var events = result.Members
+        var events = pagedMembers
             .Where(m => m.Kind == SymbolKind.Event)
             .Select(MapMember)
             .ToList();
@@ -103,7 +110,13 @@ public sealed class ExploreTypeHandler
             Methods: methods.Count > 0 ? methods : null,
             Fields: fields.Count > 0 ? fields : null,
             Events: events.Count > 0 ? events : null,
-            SnapshotVersion: snapshot.SnapshotVersion);
+            SnapshotVersion: snapshot.SnapshotVersion,
+            Stale: snapshot.IsStale ? true : null,
+            TotalMembers: totalMembers,
+            Offset: offset,
+            Limit: limit,
+            Truncated: truncated,
+            NextOffset: nextOffset);
     }
 
     private static MemberSummaryDto MapMember(TypeMemberInfo m) =>
@@ -111,6 +124,7 @@ public sealed class ExploreTypeHandler
             Name: m.Name,
             Kind: m.Kind.ToString(),
             Signature: m.Signature,
+            Accessors: m.Accessors,
             ReturnType: m.ReturnType,
             Summary: m.Summary,
             Modifiers: m.Modifiers.Count > 0 ? m.Modifiers : null);

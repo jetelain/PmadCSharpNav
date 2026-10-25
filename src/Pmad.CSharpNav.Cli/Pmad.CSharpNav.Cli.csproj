@@ -1,18 +1,53 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
-
-  <ItemGroup>
-    <ProjectReference Include="..\Pmad.CSharpNav.Contracts\Pmad.CSharpNav.Contracts.csproj" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <PackageReference Include="System.CommandLine" Version="2.0.13" />
-  </ItemGroup>
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>csnav</ToolCommandName>
+    <PackageId>Pmad.CSharpNav</PackageId>
+    <Description>High-performance C# navigation engine for AI agents and developers</Description>
+    <Authors>Pmad</Authors>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <NoWarn>$(NoWarn);NU5118</NoWarn>
   </PropertyGroup>
 
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+    <EmbeddedResource Include="..\..\skills\csharp-nav\SKILL.md" LogicalName="Pmad.CSharpNav.Cli.Skills.csharp-nav.SKILL.md" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Pmad.CSharpNav.Contracts\Pmad.CSharpNav.Contracts.csproj" />
+    <ProjectReference Include="..\Pmad.CSharpNav.Server\Pmad.CSharpNav.Server.csproj"
+                      ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.CommandLine" Version="2.0.13" />
+  </ItemGroup>
+
+  <!-- Bundle complete published Server output into dotnet tool package so daemon is standalone -->
+  <Target Name="PublishServerForToolPack" BeforeTargets="_GetPackageFiles;GenerateNuspec">
+    <MSBuild Projects="..\Pmad.CSharpNav.Server\Pmad.CSharpNav.Server.csproj"
+             Targets="Publish"
+             Properties="Configuration=$(Configuration);PublishDir=$(MSBuildProjectDirectory)\obj\$(Configuration)\$(TargetFramework)\server_publish\" />
+    <ItemGroup>
+      <_ServerPublishedFiles Include="$(MSBuildProjectDirectory)\obj\$(Configuration)\$(TargetFramework)\server_publish\**\*.*" />
+      <None Include="@(_ServerPublishedFiles)" Pack="true" PackagePath="tools/$(TargetFramework)/any/%(RecursiveDir)" Visible="false" />
+    </ItemGroup>
+  </Target>
+
+  <Target Name="CopyServerOutputForDev" AfterTargets="Build">
+    <ItemGroup>
+      <_ServerDevFiles Include="..\Pmad.CSharpNav.Server\bin\$(Configuration)\$(TargetFramework)\**\*.*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_ServerDevFiles)"
+          DestinationFolder="$(TargetDir)%(RecursiveDir)"
+          SkipUnchangedFiles="true" />
+  </Target>
+
 </Project>
+

@@ -1,0 +1,502 @@
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.FindSymbols;
+using Microsoft.CodeAnalysis.Text;
+using Pmad.CSharpNav.Application.Ports;
+using Pmad.CSharpNav.Domain;
+using Pmad.CSharpNav.Infrastructure.Workspace;
+using DomainReferenceLocation = Pmad.CSharpNav.Domain.ReferenceLocation;
+using DomainSymbolKind = Pmad.CSharpNav.Domain.SymbolKind;
+
+namespace Pmad.CSharpNav.Infrastructure.Adapters;
+
+/// <summary>
+/// Finds symbol references, call sites, implementations, and overrides across a Roslyn solution.
+/// </summary>
+public sealed class RoslynReferenceFinder : IReferenceFinder
+{
+    public async Task<SymbolResolutionResult?> ResolveSymbolAtLocationAsync(
+        IWorkspaceSnapshot snapshot,
+        string file,
+        int line,
+        int column,
+        CancellationToken ct = default)
+    {
+        var roslynSnapshot = (RoslynWorkspaceSnapshot)snapshot;
+        var docId = roslynSnapshot.FindDocumentId(file);
+        if (docId == null) return null;
+
+        var document = roslynSnapshot.Solution.GetDocument(docId);
+        if (document == null) return null;
+
+        var sourceText = await document.GetTextAsync(ct);
+        if (line < 1 || line > sourceText.Lines.Count) return null;
+
+        var textLine = sourceText.Lines[line - 1];
+        var position = textLine.Start + Math.Clamp(column - 1, 0, textLine.Span.Length);
+
+        var semanticModel = await document.GetSemanticModelAsync(ct);
+        if (semanticModel == null) return null;
+
+        var root = await document.GetSyntaxRootAsync(ct);
+        if (root == null) return null;
+
+        var token = root.FindToken(position);
+        var node = token.Parent;
+        if (node == null) return null;
+
+        var symbol = semanticModel.GetSymbolInfo(node, ct).Symbol
+                     ?? semanticModel.GetDeclaredSymbol(node, ct);
+
+        if (symbol == null)
+        {
+            // Try parent expressions if token was part of a larger expression
+            var parent = node.Parent;
+            while (parent != null && symbol == null)
+            {
+                symbol = semanticModel.GetSymbolInfo(parent, ct).Symbol
+                         ?? semanticModel.GetDeclaredSymbol(parent, ct);
+                parent = parent.Parent;
+            }
+        }
+
+        if (symbol == null) return null;
+
+        var target = MapSymbolToIdentifier(symbol);
+        var targetKind = MapSymbolKind(symbol);
+        var definedLoc = symbol.Locations.FirstOrDefault(l => l.IsInSource);
+        var definedFile = definedLoc?.SourceTree?.FilePath;
+        var definedLine = definedLoc != null ? definedLoc.GetLineSpan().StartLinePosition.Line + 1 : (int?)null;
+
+        return new SymbolResolutionResult(target, definedFile, definedLine, targetKind);
+    }
+
+    public async Task<IReadOnlyList<SymbolResolutionResult>> ResolveSymbolsByNameAsync(
+        IWorkspaceSnapshot snapshot,
+        string symbolName,
+        CancellationToken ct = default)
+    {
+        var roslynSnapshot = (RoslynWorkspaceSnapshot)snapshot;
+        var results = new List<SymbolResolutionResult>();
+
+        // Check if symbolName is a DocumentationCommentId (e.g. M:MyNamespace.MyClass.MyMethod or T:MyNamespace.MyClass)
+        if (symbolName.Length > 2 && symbolName[1] == ':' && char.IsLetter(symbolName[0]))
+        {
+            foreach (var project in roslynSnapshot.Solution.Projects)
+            {
+                var compilation = await roslynSnapshot.GetCompilationAsync(project.Id, ct);
+                if (compilation == null) continue;
+
+                var sym = Microsoft.CodeAnalysis.DocumentationCommentId.GetFirstSymbolForDeclarationId(symbolName, compilation);
+                if (sym != null)
+                {
+                    var target = MapSymbolToIdentifier(sym);
+                    var targetKind = MapSymbolKind(sym);
+                    var loc = sym.Locations.FirstOrDefault(l => l.IsInSource);
+                    var defFile = loc?.SourceTree?.FilePath;
+                    var defLine = loc != null ? loc.GetLineSpan().StartLinePosition.Line + 1 : (int?)null;
+                    results.Add(new SymbolResolutionResult(target, defFile, defLine, targetKind));
+                    return results;
+                }
+            }
+        }
+
+        // Strip parameter lists if provided (e.g. OrderService.PlaceOrder(OrderDto) -> PlaceOrder)
+        var cleanName = symbolName.Contains('(') ? symbolName[..symbolName.IndexOf('(', StringComparison.Ordinal)] : symbolName;
+        var memberName = cleanName.Contains('.') ? cleanName[(cleanName.LastIndexOf('.') + 1)..] : cleanName;
+        var hasTypeQualification = cleanName.Contains('.');
+        var typePrefix = hasTypeQualification ? cleanName[..cleanName.LastIndexOf('.')] : null;
+        var simpleTypeName = typePrefix != null && typePrefix.Contains('.') ? typePrefix[(typePrefix.LastIndexOf('.') + 1)..] : typePrefix;
+
+        // Check if querying a constructor (e.g. Customer..ctor, Customer.ctor, or .ctor)
+        var isCtor = cleanName.EndsWith("..ctor", StringComparison.OrdinalIgnoreCase) ||
+                     cleanName.EndsWith(".ctor", StringComparison.OrdinalIgnoreCase);
+
+        var ctorTypeName = isCtor
+            ? (cleanName.Contains("..ctor", StringComparison.OrdinalIgnoreCase)
+                ? cleanName[..cleanName.IndexOf("..ctor", StringComparison.OrdinalIgnoreCase)]
+                : cleanName[..cleanName.IndexOf(".ctor", StringComparison.OrdinalIgnoreCase)])
+            : null;
+
+        if (ctorTypeName != null && ctorTypeName.Contains('.'))
+        {
+            ctorTypeName = ctorTypeName[(ctorTypeName.LastIndexOf('.') + 1)..];
+        }
+
+        foreach (var project in roslynSnapshot.Solution.Projects)
+        {
+            if (isCtor)
+            {
+                var typeDeclarations = await SymbolFinder.FindSourceDeclarationsAsync(
+                    project,
+                    name => string.IsNullOrWhiteSpace(ctorTypeName) || string.Equals(name, ctorTypeName, StringComparison.OrdinalIgnoreCase),
+                    SymbolFilter.Type,
+                    cancellationToken: ct);
+
+                foreach (var symbol in typeDeclarations.OfType<INamedTypeSymbol>())
+                {
+                    foreach (var ctor in symbol.Constructors)
+                    {
+                        var target = MapSymbolToIdentifier(ctor);
+                        var loc = ctor.Locations.FirstOrDefault(l => l.IsInSource) ?? symbol.Locations.FirstOrDefault(l => l.IsInSource);
+                        var defFile = loc?.SourceTree?.FilePath;
+                        var defLine = loc != null ? loc.GetLineSpan().StartLinePosition.Line + 1 : (int?)null;
+                        results.Add(new SymbolResolutionResult(target, defFile, defLine, DomainSymbolKind.Constructor));
+                    }
+                }
+                continue;
+            }
+
+            var declarations = await SymbolFinder.FindSourceDeclarationsAsync(
+                project,
+                name => string.Equals(name, memberName, StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(name, cleanName, StringComparison.OrdinalIgnoreCase),
+                cancellationToken: ct);
+
+            foreach (var symbol in declarations)
+            {
+                var fullDisplayName = symbol.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat);
+
+                bool matches;
+                if (hasTypeQualification)
+                {
+                    var containingTypeName = symbol.ContainingType?.Name;
+                    var containingTypeFqn = symbol.ContainingType?.ToDisplayString();
+
+                    matches = fullDisplayName.Contains(cleanName, StringComparison.OrdinalIgnoreCase) ||
+                              (containingTypeName != null && string.Equals(containingTypeName, simpleTypeName, StringComparison.OrdinalIgnoreCase) && string.Equals(symbol.Name, memberName, StringComparison.OrdinalIgnoreCase)) ||
+                              (containingTypeFqn != null && string.Equals(containingTypeFqn, typePrefix, StringComparison.OrdinalIgnoreCase) && string.Equals(symbol.Name, memberName, StringComparison.OrdinalIgnoreCase));
+                }
+                else
+                {
+                    matches = fullDisplayName.Contains(cleanName, StringComparison.OrdinalIgnoreCase) ||
+                              string.Equals(symbol.Name, memberName, StringComparison.OrdinalIgnoreCase);
+                }
+
+                if (matches)
+                {
+                    var target = MapSymbolToIdentifier(symbol);
+                    var targetKind = MapSymbolKind(symbol);
+                    var loc = symbol.Locations.FirstOrDefault(l => l.IsInSource);
+                    var defFile = loc?.SourceTree?.FilePath;
+                    var defLine = loc != null ? loc.GetLineSpan().StartLinePosition.Line + 1 : (int?)null;
+
+                    results.Add(new SymbolResolutionResult(target, defFile, defLine, targetKind));
+                }
+            }
+        }
+
+        // Deduplicate candidates
+        return results
+            .GroupBy(r => (r.Target.Assembly, r.Target.ContainingType, r.Target.MemberSignature, r.DefinedIn, r.DefinedLine))
+            .Select(g => g.First())
+            .ToList();
+    }
+
+    public async Task<IReadOnlyList<DomainReferenceLocation>> FindReferencesAsync(
+        IWorkspaceSnapshot snapshot,
+        SymbolIdentifier symbol,
+        ReferenceSearchOptions options,
+        CancellationToken ct = default)
+    {
+        var roslynSnapshot = (RoslynWorkspaceSnapshot)snapshot;
+        var solution = roslynSnapshot.Solution;
+
+        // Resolve symbol in solution
+        ISymbol? resolvedSymbol = null;
+
+        foreach (var project in solution.Projects)
+        {
+            var compilation = await roslynSnapshot.GetCompilationAsync(project.Id, ct);
+            if (compilation == null) continue;
+
+            if (!string.IsNullOrWhiteSpace(symbol.SymbolId))
+            {
+                resolvedSymbol = Microsoft.CodeAnalysis.DocumentationCommentId.GetFirstSymbolForDeclarationId(symbol.SymbolId, compilation);
+                if (resolvedSymbol != null) break;
+            }
+
+            if (!string.IsNullOrWhiteSpace(symbol.MemberSignature))
+            {
+                var cleanMemberName = ExtractIdentifierName(symbol.MemberSignature);
+                var declarations = await SymbolFinder.FindSourceDeclarationsAsync(
+                    project,
+                    name => string.Equals(name, cleanMemberName, StringComparison.OrdinalIgnoreCase) ||
+                            string.Equals(name, symbol.MemberSignature, StringComparison.OrdinalIgnoreCase),
+                    cancellationToken: ct);
+
+                resolvedSymbol = declarations.FirstOrDefault(d =>
+                    string.IsNullOrWhiteSpace(symbol.ContainingType) ||
+                    string.Equals(d.ContainingType?.ToDisplayString(), symbol.ContainingType, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(d.ContainingType?.Name, symbol.ContainingType, StringComparison.OrdinalIgnoreCase))
+                    ?? declarations.FirstOrDefault();
+
+                if (resolvedSymbol != null) break;
+            }
+            else if (!string.IsNullOrWhiteSpace(symbol.ContainingType))
+            {
+                resolvedSymbol = compilation.GetTypeByMetadataName(symbol.ContainingType);
+                if (resolvedSymbol != null) break;
+            }
+        }
+
+        if (resolvedSymbol == null) return Array.Empty<DomainReferenceLocation>();
+
+        var referencedSymbols = await SymbolFinder.FindReferencesAsync(resolvedSymbol, solution, ct);
+        var results = new List<DomainReferenceLocation>();
+
+        foreach (var refSymbol in referencedSymbols)
+        {
+            foreach (var location in refSymbol.Locations)
+            {
+                if (location.Document.FilePath == null) continue;
+
+                var project = location.Document.Project;
+
+                // Filter test projects if requested
+                if (options.ExcludeTests && IsTestProject(project))
+                {
+                    continue;
+                }
+
+                // Filter project if specified
+                if (!string.IsNullOrWhiteSpace(options.Project) &&
+                    !string.Equals(project.Name, options.Project, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                // Filter framework if specified
+                if (!string.IsNullOrWhiteSpace(options.Framework))
+                {
+                    var projName = project.Name;
+                    var outPath = project.OutputFilePath ?? "";
+                    if (!projName.Contains(options.Framework, StringComparison.OrdinalIgnoreCase) &&
+                        !outPath.Contains(options.Framework, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+                }
+
+                var sourceText = await location.Document.GetTextAsync(ct);
+                var lineSpan = location.Location.GetLineSpan();
+                var lineIndex = lineSpan.StartLinePosition.Line;
+                var colIndex = lineSpan.StartLinePosition.Character + 1;
+
+                var isGenerated = IsGeneratedFile(location.Document.FilePath);
+                if (!options.IncludeGenerated && isGenerated)
+                {
+                    continue;
+                }
+
+                // Extract context snippet (1-3 lines)
+                var snippet = ExtractSnippet(sourceText, lineIndex);
+
+                // Find containing member
+                var root = await location.Document.GetSyntaxRootAsync(ct);
+                var token = root?.FindToken(location.Location.SourceSpan.Start);
+                var containingMember = token?.Parent?.AncestorsAndSelf()
+                    .OfType<MemberDeclarationSyntax>()
+                    .FirstOrDefault();
+
+                var memberName = containingMember switch
+                {
+                    MethodDeclarationSyntax m => m.Identifier.Text,
+                    PropertyDeclarationSyntax p => p.Identifier.Text,
+                    ConstructorDeclarationSyntax c => c.Identifier.Text,
+                    _ => null
+                };
+
+                var kind = ClassifyReference(token?.Parent);
+
+                results.Add(new DomainReferenceLocation(
+                    File: location.Document.FilePath,
+                    Line: lineIndex + 1,
+                    Column: colIndex,
+                    Snippet: snippet,
+                    ContainingMember: memberName,
+                    Kind: kind,
+                    IsGenerated: isGenerated));
+            }
+        }
+
+        // Include overrides if requested
+        if (options.IncludeOverrides && resolvedSymbol is (IMethodSymbol or IPropertySymbol or IEventSymbol))
+        {
+            var overrides = await SymbolFinder.FindOverridesAsync(resolvedSymbol, solution, cancellationToken: ct);
+            foreach (var over in overrides)
+            {
+                foreach (var loc in over.Locations.Where(l => l.IsInSource))
+                {
+                    AddLocationFromSource(loc, ReferenceKind.Override, results, options);
+                }
+            }
+        }
+
+        // Include implementations if requested
+        if (options.IncludeImplementations && resolvedSymbol is (INamedTypeSymbol or IMethodSymbol or IPropertySymbol or IEventSymbol))
+        {
+            var implementations = await SymbolFinder.FindImplementationsAsync(resolvedSymbol, solution, cancellationToken: ct);
+            foreach (var impl in implementations)
+            {
+                foreach (var loc in impl.Locations.Where(l => l.IsInSource))
+                {
+                    AddLocationFromSource(loc, ReferenceKind.Implementation, results, options);
+                }
+            }
+        }
+
+        return results;
+    }
+
+    private static void AddLocationFromSource(
+        Location loc,
+        ReferenceKind kind,
+        List<DomainReferenceLocation> results,
+        ReferenceSearchOptions options)
+    {
+        var filePath = loc.SourceTree?.FilePath;
+        if (filePath == null) return;
+
+        var isGen = IsGeneratedFile(filePath);
+        if (!options.IncludeGenerated && isGen) return;
+
+        var lineSpan = loc.GetLineSpan();
+        var line = lineSpan.StartLinePosition.Line + 1;
+        var col = lineSpan.StartLinePosition.Character + 1;
+
+        var snippet = loc.SourceTree?.GetText().Lines[line - 1].ToString().Trim() ?? "";
+
+        results.Add(new DomainReferenceLocation(
+            File: filePath,
+            Line: line,
+            Column: col,
+            Snippet: snippet,
+            ContainingMember: null,
+            Kind: kind,
+            IsGenerated: isGen));
+    }
+
+    private static ReferenceKind ClassifyReference(SyntaxNode? node)
+    {
+        if (node == null) return ReferenceKind.TypeReference;
+
+        // 1. Invocation expression (e.g. obj.Method(), Method())
+        var invocation = node.AncestorsAndSelf().OfType<InvocationExpressionSyntax>().FirstOrDefault();
+        if (invocation != null && (invocation.Expression == node || invocation.Expression.Span.Contains(node.Span)))
+        {
+            return ReferenceKind.Invocation;
+        }
+
+        // 2. Object creation expression (e.g. new Customer(), new Ns.Customer())
+        var objectCreation = node.AncestorsAndSelf().OfType<ObjectCreationExpressionSyntax>().FirstOrDefault();
+        if (objectCreation != null && (objectCreation.Type == node || objectCreation.Type.Span.Contains(node.Span)))
+        {
+            return ReferenceKind.Instantiation;
+        }
+
+        // 3. Assignment expression
+        var assignment = node.AncestorsAndSelf().OfType<AssignmentExpressionSyntax>().FirstOrDefault();
+        if (assignment != null)
+        {
+            if (assignment.Left.Span.Contains(node.Span))
+            {
+                return ReferenceKind.Write;
+            }
+            return ReferenceKind.Read;
+        }
+
+        // 4. Type reference in declarations, bases, parameters, generics
+        if (node.AncestorsAndSelf().Any(n => n is TypeSyntax or BaseTypeDeclarationSyntax or ParameterSyntax))
+        {
+            return ReferenceKind.TypeReference;
+        }
+
+        return ReferenceKind.Read;
+    }
+
+    private static string ExtractSnippet(SourceText sourceText, int lineIndex)
+    {
+        var startLine = Math.Max(0, lineIndex - 1);
+        var endLine = Math.Min(sourceText.Lines.Count - 1, lineIndex + 1);
+
+        var lines = new List<string>();
+        for (int i = startLine; i <= endLine; i++)
+        {
+            lines.Add(sourceText.Lines[i].ToString().TrimEnd());
+        }
+
+        return string.Join(Environment.NewLine, lines);
+    }
+
+    private static bool IsTestProject(Project project)
+    {
+        var name = project.Name;
+        if (name.Contains(".Tests", StringComparison.OrdinalIgnoreCase) ||
+            name.Contains(".Test", StringComparison.OrdinalIgnoreCase) ||
+            name.Contains(".UnitTests", StringComparison.OrdinalIgnoreCase) ||
+            name.Contains(".IntegrationTests", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return project.MetadataReferences.Any(m =>
+        {
+            var path = m.Display ?? "";
+            return path.Contains("xunit", StringComparison.OrdinalIgnoreCase) ||
+                   path.Contains("nunit", StringComparison.OrdinalIgnoreCase) ||
+                   path.Contains("mstest", StringComparison.OrdinalIgnoreCase);
+        });
+    }
+
+    private static bool IsGeneratedFile(string filePath) =>
+        filePath.EndsWith(".g.cs", StringComparison.OrdinalIgnoreCase) ||
+        filePath.EndsWith(".generated.cs", StringComparison.OrdinalIgnoreCase) ||
+        filePath.Contains(@"\obj\", StringComparison.OrdinalIgnoreCase) ||
+        filePath.Contains("/obj/", StringComparison.OrdinalIgnoreCase);
+
+    private static SymbolIdentifier MapSymbolToIdentifier(ISymbol symbol)
+    {
+        return new SymbolIdentifier(
+            Assembly: symbol.ContainingAssembly?.Name ?? "",
+            Namespace: symbol.ContainingNamespace?.ToDisplayString(),
+            ContainingType: symbol.ContainingType?.ToDisplayString(),
+            MemberSignature: symbol.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat),
+            SymbolId: symbol.GetDocumentationCommentId());
+    }
+
+    private static DomainSymbolKind MapSymbolKind(ISymbol symbol) =>
+        symbol switch
+        {
+            INamedTypeSymbol t when t.TypeKind == TypeKind.Interface => DomainSymbolKind.Interface,
+            INamedTypeSymbol t when t.TypeKind == TypeKind.Enum => DomainSymbolKind.Enum,
+            INamedTypeSymbol t when t.TypeKind == TypeKind.Struct => DomainSymbolKind.Struct,
+            INamedTypeSymbol t when t.IsRecord => DomainSymbolKind.Record,
+            INamedTypeSymbol => DomainSymbolKind.Class,
+            IMethodSymbol m when m.MethodKind == MethodKind.Constructor => DomainSymbolKind.Constructor,
+            IMethodSymbol => DomainSymbolKind.Method,
+            IPropertySymbol => DomainSymbolKind.Property,
+            IFieldSymbol => DomainSymbolKind.Field,
+            IEventSymbol => DomainSymbolKind.Event,
+            _ => DomainSymbolKind.Class
+        };
+
+    private static string ExtractIdentifierName(string signature)
+    {
+        var clean = signature;
+        if (clean.Contains('('))
+        {
+            clean = clean[..clean.IndexOf('(', StringComparison.Ordinal)];
+        }
+        if (clean.Contains('.'))
+        {
+            clean = clean[(clean.LastIndexOf('.') + 1)..];
+        }
+        if (clean.Contains(' '))
+        {
+            clean = clean[(clean.LastIndexOf(' ') + 1)..];
+        }
+        return clean.Trim();
+    }
+}

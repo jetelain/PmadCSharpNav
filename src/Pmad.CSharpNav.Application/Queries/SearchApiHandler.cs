@@ -62,6 +62,7 @@ public sealed class SearchApiHandler
             Results: pagedResults,
             NextOffset: nextOffset,
             IndexState: _searchEngine.GetIndexState(),
-            SnapshotVersion: snapshot.SnapshotVersion);
+            SnapshotVersion: snapshot.SnapshotVersion,
+            Stale: snapshot.IsStale ? true : null);
     }
 }

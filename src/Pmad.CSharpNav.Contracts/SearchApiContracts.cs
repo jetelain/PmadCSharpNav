@@ -29,4 +29,5 @@ public sealed record SearchApiResponse(
     IReadOnlyList<ApiSearchResultDto> Results,
     int? NextOffset = null,
     string IndexState = "ready", // "partial" | "ready"
-    long? SnapshotVersion = null);
+    long? SnapshotVersion = null,
+    bool? Stale = null);

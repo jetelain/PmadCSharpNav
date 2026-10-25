@@ -12,6 +12,7 @@ public sealed class FakeWorkspaceSnapshot : IWorkspaceSnapshot
 
 public sealed class FakeSolutionWorkspace : ISolutionWorkspace
 {
+    public string State { get; set; } = "ready";
     public IWorkspaceSnapshot Snapshot { get; set; } = new FakeWorkspaceSnapshot();
 
     public Task<IWorkspaceSnapshot> GetCurrentSnapshotAsync(CancellationToken ct = default) =>

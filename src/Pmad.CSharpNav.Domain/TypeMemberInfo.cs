@@ -11,4 +11,5 @@ public sealed record TypeMemberInfo(
     IReadOnlyList<string> Modifiers,
     string? ReturnType = null,
     string? Summary = null,
-    IReadOnlyDictionary<string, string>? Parameters = null);
+    IReadOnlyDictionary<string, string>? Parameters = null,
+    string? Accessors = null);

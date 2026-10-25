@@ -7,6 +7,7 @@ namespace Pmad.CSharpNav.Application.Ports;
 /// </summary>
 public interface ISolutionWorkspace
 {
+    string State { get; }
     Task<IWorkspaceSnapshot> GetCurrentSnapshotAsync(CancellationToken ct = default);
     Task<IWorkspaceSnapshot> SyncDocumentAsync(string filePath, string? content = null, CancellationToken ct = default);
     Task ReloadSolutionAsync(CancellationToken ct = default);

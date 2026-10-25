@@ -17,4 +17,5 @@ public sealed record DecompileResponse(
     string LanguageVersion,
     string Source,
     bool IsReferenceAssemblyOnly = false,
-    long? SnapshotVersion = null);
+    long? SnapshotVersion = null,
+    bool? Stale = null);

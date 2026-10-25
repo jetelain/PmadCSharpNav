@@ -43,6 +43,7 @@ public sealed class DecompileMemberHandler
             LanguageVersion: decompiled.LanguageVersion,
             Source: decompiled.Source,
             IsReferenceAssemblyOnly: decompiled.IsReferenceAssemblyOnly,
-            SnapshotVersion: snapshot.SnapshotVersion);
+            SnapshotVersion: snapshot.SnapshotVersion,
+            Stale: snapshot.IsStale ? true : null);
     }
 }

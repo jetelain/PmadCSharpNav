@@ -13,7 +13,8 @@ public sealed record ReferenceSearchOptions(
 public sealed record SymbolResolutionResult(
     SymbolIdentifier Target,
     string? DefinedIn = null,
-    int? DefinedLine = null);
+    int? DefinedLine = null,
+    SymbolKind? TargetKind = null);
 
 /// <summary>
 /// Port for finding references and usages of symbols across source code.

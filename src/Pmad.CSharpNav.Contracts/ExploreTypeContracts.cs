@@ -37,4 +37,10 @@ public sealed record ExploreTypeResponse(
     IReadOnlyList<MemberSummaryDto>? Methods = null,
     IReadOnlyList<MemberSummaryDto>? Fields = null,
     IReadOnlyList<MemberSummaryDto>? Events = null,
-    long? SnapshotVersion = null);
+    long? SnapshotVersion = null,
+    bool? Stale = null,
+    int? TotalMembers = null,
+    int? Offset = null,
+    int? Limit = null,
+    bool? Truncated = null,
+    int? NextOffset = null);

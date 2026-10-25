@@ -38,4 +38,5 @@ public sealed record FindReferencesResponse(
     bool Truncated,
     IReadOnlyList<ReferenceItemDto> References,
     int? NextOffset = null,
-    long? SnapshotVersion = null);
+    long? SnapshotVersion = null,
+    bool? Stale = null);

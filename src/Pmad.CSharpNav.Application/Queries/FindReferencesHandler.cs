@@ -103,7 +103,7 @@ public sealed class FindReferencesHandler
 
         var targetDto = new ReferenceTargetDto(
             Name: targetResult.Target.MemberSignature ?? targetResult.Target.ContainingType ?? targetResult.Target.Assembly,
-            Kind: "Symbol",
+            Kind: targetResult.TargetKind?.ToString() ?? "Symbol",
             ContainingType: targetResult.Target.ContainingType,
             DefinedIn: targetResult.DefinedIn,
             Line: targetResult.DefinedLine);
@@ -116,6 +116,7 @@ public sealed class FindReferencesHandler
             Truncated: truncated,
             References: pagedReferences,
             NextOffset: nextOffset,
-            SnapshotVersion: snapshot.SnapshotVersion);
+            SnapshotVersion: snapshot.SnapshotVersion,
+            Stale: snapshot.IsStale ? true : null);
     }
 }

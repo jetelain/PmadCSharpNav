@@ -85,4 +85,64 @@ public class ExploreTypeHandlerTests
         var ex = await act.Should().ThrowAsync<NavException>();
         ex.Which.Code.Should().Be("TYPE_NOT_FOUND");
     }
+
+    [Fact]
+    public async Task HandleAsync_WithPagination_AppliesLimitAndOffsetAndReturnsPaginationMetadata()
+    {
+        var handler = new ExploreTypeHandler(_workspace, _explorer);
+
+        var members = new List<TypeMemberInfo>();
+        for (int i = 1; i <= 5; i++)
+        {
+            members.Add(new TypeMemberInfo($"Method{i}", SymbolKind.Method, $"public void Method{i}()", Accessibility.Public, Array.Empty<string>(), ReturnType: "void"));
+        }
+
+        _explorer.ExplorationResult = new TypeExplorationResult(
+            Name: "OrderService",
+            FullName: "Commerce.OrderService",
+            Kind: SymbolKind.Class,
+            Accessibility: Accessibility.Public,
+            Modifiers: Array.Empty<string>(),
+            BaseType: "System.Object",
+            Interfaces: Array.Empty<string>(),
+            Summary: "Handles orders.",
+            Members: members);
+
+        var response = await handler.HandleAsync(new ExploreTypeRequest(
+            Type: "OrderService",
+            Offset: 1,
+            Limit: 2));
+
+        response.TotalMembers.Should().Be(5);
+        response.Offset.Should().Be(1);
+        response.Limit.Should().Be(2);
+        response.Truncated.Should().BeTrue();
+        response.NextOffset.Should().Be(3);
+        response.Methods.Should().HaveCount(2);
+        response.Methods![0].Name.Should().Be("Method2");
+        response.Methods![1].Name.Should().Be("Method3");
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenSnapshotIsStale_PropagatesStaleFlag()
+    {
+        var handler = new ExploreTypeHandler(_workspace, _explorer);
+        ((FakeWorkspaceSnapshot)_workspace.Snapshot).IsStale = true;
+
+        _explorer.ExplorationResult = new TypeExplorationResult(
+            Name: "OrderService",
+            FullName: "Commerce.OrderService",
+            Kind: SymbolKind.Class,
+            Accessibility: Accessibility.Public,
+            Modifiers: Array.Empty<string>(),
+            BaseType: "System.Object",
+            Interfaces: Array.Empty<string>(),
+            Summary: null,
+            Members: Array.Empty<TypeMemberInfo>());
+
+        var response = await handler.HandleAsync(new ExploreTypeRequest(Type: "OrderService"));
+
+        response.Stale.Should().BeTrue();
+    }
 }
+
