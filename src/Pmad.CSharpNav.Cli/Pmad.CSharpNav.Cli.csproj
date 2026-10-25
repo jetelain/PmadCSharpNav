@@ -10,7 +10,12 @@
     <PackageId>Pmad.CSharpNav</PackageId>
     <Description>High-performance C# navigation engine for AI agents and developers</Description>
     <Authors>Pmad</Authors>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/jetelain/PmadCSharpNav</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/jetelain/PmadCSharpNav</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <IsPackable>true</IsPackable>
     <NoWarn>$(NoWarn);NU5118</NoWarn>
   </PropertyGroup>
 
