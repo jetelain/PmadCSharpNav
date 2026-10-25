@@ -1,0 +1,22 @@
+<Project>
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <Company>Pmad</Company>
+    <Product>Pmad.CSharpNav</Product>
+    <Version>0.1.0-alpha</Version>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="$(MSBuildProjectName.EndsWith('.Tests')) or $(MSBuildProjectName.EndsWith('IntegrationTests'))">
+    <NoWarn>$(NoWarn);CA1707;CA1861</NoWarn>
+  </PropertyGroup>
+
+  <!-- MSBuildLocator requirement: do not copy MSBuild runtime assemblies to output folder in projects referencing Roslyn MSBuild -->
+  <ItemGroup Condition="'$(MSBuildProjectName)' != 'Pmad.CSharpNav.Domain' and '$(MSBuildProjectName)' != 'Pmad.CSharpNav.Contracts' and '$(MSBuildProjectName)' != 'Pmad.CSharpNav.Domain.Tests'">
+    <PackageReference Include="Microsoft.Build.Framework" Version="17.11.48" ExcludeAssets="runtime" PrivateAssets="all" />
+  </ItemGroup>
+</Project>
