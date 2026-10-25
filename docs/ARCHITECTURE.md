@@ -454,20 +454,20 @@ All endpoints require the bearer token (section 5.6).
 The CLI is a thin wrapper that routes to the daemon.
 
 ```bash
-# 1. Search References
-csnav refs --symbol "OrderService.PlaceOrder"
+# 1. Search References (canonical: references, alias: refs)
+csnav references --symbol "OrderService.PlaceOrder"
 csnav refs --file "Services/OrderService.cs" --line 42 --column 15
 csnav refs --symbol "Customer..ctor" --exclude-tests --limit 20
 
-# 2. Search APIs
-csnav api "HashPassword"
-csnav api "*Token*" --scope dependencies --kind method
-csnav api --doc "calculates sha256" --kind class
+# 2. Search APIs (canonical: search, aliases: api, find)
+csnav search "HashPassword"
+csnav search "*Token*" --scope dependencies --kind method
+csnav search --doc "calculates sha256" --kind class
 
-# 3. Explore Members & Variables
-csnav explore --type "OrderService"
-csnav explore --type "System.Text.Json.JsonSerializerOptions" --no-inherited
-csnav explore --file "Controllers/OrderController.cs" --line 25 --column 10
+# 3. Explore & Inspect Members (canonical: inspect, aliases: explore, type)
+csnav inspect --type "OrderService"
+csnav inspect --type "System.Text.Json.JsonSerializerOptions" --no-inherited
+csnav inspect --file "Controllers/OrderController.cs" --line 25 --column 10
 
 # 4. Decompile
 csnav decompile --assembly "Newtonsoft.Json" --type "JsonConvert" --member "SerializeObject"

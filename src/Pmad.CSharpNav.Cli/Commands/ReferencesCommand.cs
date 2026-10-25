@@ -5,7 +5,7 @@ using Pmad.CSharpNav.Contracts;
 
 namespace Pmad.CSharpNav.Cli.Commands;
 
-public static class RefsCommand
+public static class ReferencesCommand
 {
     public static Command Create(GlobalOptions globals, NavDaemonClient client)
     {
@@ -21,7 +21,10 @@ public static class RefsCommand
         var limitOption = new Option<int>("--limit") { Description = "Maximum number of references to return", DefaultValueFactory = _ => NavConstants.DefaultLimit };
         var offsetOption = new Option<int>("--offset") { Description = "Offset for pagination", DefaultValueFactory = _ => 0 };
 
-        var cmd = new Command("refs", "Find references to a symbol or source location");
+        var cmd = new Command("references", "Find references to a symbol or source location");
+        cmd.Aliases.Add("refs");
+        cmd.Aliases.Add("find-refs");
+
         cmd.Add(symbolOption);
         cmd.Add(fileOption);
         cmd.Add(lineOption);
@@ -114,4 +117,10 @@ public static class RefsCommand
 
         return cmd;
     }
+}
+
+[Obsolete("Use ReferencesCommand instead")]
+public static class RefsCommand
+{
+    public static Command Create(GlobalOptions globals, NavDaemonClient client) => ReferencesCommand.Create(globals, client);
 }

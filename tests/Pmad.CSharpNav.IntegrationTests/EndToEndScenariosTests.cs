@@ -378,8 +378,11 @@ public sealed class EndToEndScenariosTests : IAsyncLifetime, IDisposable
 
         var content = await File.ReadAllTextAsync(skillFile);
         content.Should().Contain("name: csharp-nav");
+        content.Should().Contain("csnav references");
         content.Should().Contain("csnav refs");
+        content.Should().Contain("csnav search");
         content.Should().Contain("csnav api");
+        content.Should().Contain("csnav inspect");
         content.Should().Contain("csnav explore");
         content.Should().Contain("csnav decompile");
     }

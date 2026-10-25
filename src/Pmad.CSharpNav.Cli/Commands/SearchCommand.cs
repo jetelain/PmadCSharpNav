@@ -5,7 +5,7 @@ using Pmad.CSharpNav.Contracts;
 
 namespace Pmad.CSharpNav.Cli.Commands;
 
-public static class ApiCommand
+public static class SearchCommand
 {
     public static Command Create(GlobalOptions globals, NavDaemonClient client)
     {
@@ -17,7 +17,10 @@ public static class ApiCommand
         var limitOption = new Option<int>("--limit") { Description = "Maximum number of results to return", DefaultValueFactory = _ => 50 };
         var offsetOption = new Option<int>("--offset") { Description = "Offset for pagination", DefaultValueFactory = _ => 0 };
 
-        var cmd = new Command("api", "Search public API signatures and symbols");
+        var cmd = new Command("search", "Search public API signatures and symbols");
+        cmd.Aliases.Add("api");
+        cmd.Aliases.Add("find");
+
         cmd.Add(patternArg);
         cmd.Add(docOption);
         cmd.Add(scopeOption);
@@ -88,4 +91,10 @@ public static class ApiCommand
 
         return cmd;
     }
+}
+
+[Obsolete("Use SearchCommand instead")]
+public static class ApiCommand
+{
+    public static Command Create(GlobalOptions globals, NavDaemonClient client) => SearchCommand.Create(globals, client);
 }

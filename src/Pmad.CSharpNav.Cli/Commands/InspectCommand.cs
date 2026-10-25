@@ -5,7 +5,7 @@ using Pmad.CSharpNav.Contracts;
 
 namespace Pmad.CSharpNav.Cli.Commands;
 
-public static class ExploreCommand
+public static class InspectCommand
 {
     public static Command Create(GlobalOptions globals, NavDaemonClient client)
     {
@@ -18,7 +18,10 @@ public static class ExploreCommand
         var limitOption = new Option<int>("--limit") { Description = "Maximum number of members to return", DefaultValueFactory = _ => NavConstants.DefaultLimit };
         var offsetOption = new Option<int>("--offset") { Description = "Offset for pagination", DefaultValueFactory = _ => 0 };
 
-        var cmd = new Command("explore", "Inspect type members, constructors, properties, methods, and hierarchy");
+        var cmd = new Command("inspect", "Inspect type members, constructors, properties, methods, and hierarchy");
+        cmd.Aliases.Add("explore");
+        cmd.Aliases.Add("type");
+
         cmd.Add(typeOption);
         cmd.Add(fileOption);
         cmd.Add(lineOption);
@@ -92,4 +95,10 @@ public static class ExploreCommand
 
         return cmd;
     }
+}
+
+[Obsolete("Use InspectCommand instead")]
+public static class ExploreCommand
+{
+    public static Command Create(GlobalOptions globals, NavDaemonClient client) => InspectCommand.Create(globals, client);
 }

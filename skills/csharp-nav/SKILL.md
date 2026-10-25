@@ -16,21 +16,22 @@ Always prefer `csnav` over `grep` or file text searching when navigating C# code
 
 ## Command Reference
 
-### 1. `csnav refs` — Find References
+### 1. `csnav references` (alias: `csnav refs`) — Find References
 Finds all usages, call sites, implementations, and reads/writes of a symbol.
 
 ```bash
 # Find references by symbol name (e.g. method, class, interface, property)
-csnav refs --symbol "ProcessOrder" --format json
+csnav references --symbol "ProcessOrder" --format json
+# Or shorthand: csnav refs --symbol "ProcessOrder" --format json
 
 # Exclude references in test projects
-csnav refs --symbol "IOrderRepository.SaveOrder" --exclude-tests --format json
+csnav references --symbol "IOrderRepository.SaveOrder" --exclude-tests --format json
 
 # Find references at exact source file location (1-indexed line and column)
-csnav refs --file "src/Services/OrderService.cs" --line 42 --column 18 --format json
+csnav references --file "src/Services/OrderService.cs" --line 42 --column 18 --format json
 
 # Filter references to a specific project
-csnav refs --symbol "Order" --project "MyApp.Core" --format json
+csnav references --symbol "Order" --project "MyApp.Core" --format json
 ```
 
 **Key Options:**
@@ -43,24 +44,25 @@ csnav refs --symbol "Order" --project "MyApp.Core" --format json
 
 ---
 
-### 2. `csnav api` — Public API & Symbol Search
+### 2. `csnav search` (alias: `csnav api`, `csnav find`) — Public API & Symbol Search
 Searches type and member declarations using wildcard patterns across source code and external referenced assemblies.
 
 ```bash
 # Search by pattern (wildcard * supported)
-csnav api "*Repository" --format json
+csnav search "*Repository" --format json
+# Or shorthand: csnav api "*Repository" --format json
 
 # Search solution code only (fastest)
-csnav api "*Service" --scope solution --format json
+csnav search "*Service" --scope solution --format json
 
 # Include external dependencies (NuGet & .NET BCL)
-csnav api "JsonSerializer*" --scope all --format json
+csnav search "JsonSerializer*" --scope all --format json
 
 # Filter by symbol kind (class, interface, method, property, enum, record, struct)
-csnav api "I*Handler" --kind interface --format json
+csnav search "I*Handler" --kind interface --format json
 
 # Search within XML documentation comments (summary, param, returns)
-csnav api --doc "calculates sha256" --format markdown
+csnav search --doc "calculates sha256" --format markdown
 ```
 
 **Key Options:**
@@ -73,21 +75,22 @@ csnav api --doc "calculates sha256" --format markdown
 
 ---
 
-### 3. `csnav explore` — Type & Member Exploration
+### 3. `csnav inspect` (alias: `csnav explore`, `csnav type`) — Type & Member Inspection
 Inspects constructors, methods, properties, fields, base types, and implemented interfaces.
 
 ```bash
-# Explore type by fully qualified name
-csnav explore --type "MyApp.Services.OrderService" --format json
+# Inspect type by fully qualified name
+csnav inspect --type "MyApp.Services.OrderService" --format json
+# Or shorthand: csnav explore --type "MyApp.Services.OrderService" --format json
 
-# Explore only declared members (exclude inherited object/base members)
-csnav explore --type "MyApp.Services.OrderService" --no-inherited --format json
+# Inspect only declared members (exclude inherited object/base members)
+csnav inspect --type "MyApp.Services.OrderService" --no-inherited --format json
 
-# Explore type defined at source location
-csnav explore --file "src/MyApp/OrderService.cs" --line 10 --column 15 --format json
+# Inspect type defined at source location
+csnav inspect --file "src/MyApp/OrderService.cs" --line 10 --column 15 --format json
 
 # Include internal and private members
-csnav explore --type "MyApp.Services.OrderService" --access all --format json
+csnav inspect --type "MyApp.Services.OrderService" --access all --format json
 ```
 
 **Key Options:**
@@ -105,7 +108,7 @@ Decompiles external NuGet or .NET BCL libraries to readable C# source code, auto
 # Decompile an entire external BCL type
 csnav decompile --type "System.Uri" --format markdown
 
-# Decompile a specific method
+# Decompile a specific member
 csnav decompile --type "System.Uri" --member "IsLoopback" --format markdown
 
 # Decompile NuGet package symbol
@@ -138,15 +141,15 @@ csnav server stop
 ## Agent Guidelines & Workflows
 
 1. **Investigating an Unknown Codebase:**
-   - Use `csnav api "*"` or `csnav api "*Service"` with `--scope solution` to map available domain services.
-   - Use `csnav explore --type <Type> --no-inherited --format json` to inspect API contracts before reading full files.
+   - Use `csnav search "*"` or `csnav search "*Service"` (or `csnav api`) with `--scope solution` to map available domain services.
+   - Use `csnav inspect --type <Type> --no-inherited --format json` (or `csnav explore`) to inspect API contracts before reading full files.
 
 2. **Refactoring or Changing a Method:**
-   - Before modifying a method, run `csnav refs --symbol <MethodName> --exclude-tests` to see all production call sites.
-   - Run `csnav refs --symbol <MethodName>` without `--exclude-tests` to see which unit tests need updating.
+   - Before modifying a method, run `csnav references --symbol <MethodName> --exclude-tests` (or `csnav refs`) to see all production call sites.
+   - Run `csnav references --symbol <MethodName>` without `--exclude-tests` to see which unit tests need updating.
 
 3. **Tracing Interface Implementations:**
-   - Run `csnav refs --symbol <InterfaceName>` to find all classes implementing the interface and places injecting it.
+   - Run `csnav references --symbol <InterfaceName>` to find all classes implementing the interface and places injecting it.
 
 4. **Investigating External Dependencies:**
    - Use `csnav decompile --type <ExternalType>` to inspect the actual implementation when debugging third-party library behavior or framework internals.

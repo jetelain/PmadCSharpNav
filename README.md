@@ -103,46 +103,49 @@ All commands support the following options:
 
 ### Commands
 
-#### 1. `refs` — Find References
+#### 1. `references` (alias `refs`) — Find References
 Find all usages, call sites, implementations, or overrides of a symbol or source location:
 ```bash
 # By symbol name
-csnav refs --symbol "NavConstants"
+csnav references --symbol "NavConstants"
+# Or shorthand: csnav refs --symbol "NavConstants"
 
 # Exclude references in test projects
-csnav refs --symbol "NavConstants" --exclude-tests
+csnav references --symbol "NavConstants" --exclude-tests
 
 # By file location (1-indexed line and column)
-csnav refs --file src/Pmad.CSharpNav.Contracts/NavConstants.cs --line 5 --column 25
+csnav references --file src/Pmad.CSharpNav.Contracts/NavConstants.cs --line 5 --column 25
 
 # Format as JSON
-csnav refs --symbol "FindReferencesRequest" --format json
+csnav references --symbol "FindReferencesRequest" --format json
 ```
 
-#### 2. `api` — Search Public API Signatures
+#### 2. `search` (alias `api`, `find`) — Search Public API Signatures
 Search public type and member signatures across source code and referenced libraries:
 ```bash
 # Search by name pattern
-csnav api "*Serializer"
+csnav search "*Serializer"
+# Or shorthand: csnav api "*Serializer"
 
 # Search in solution scope only
-csnav api "Nav*" --scope solution
+csnav search "Nav*" --scope solution
 
 # Search within XML doc comments
-csnav api --doc "sha256" --format markdown
+csnav search --doc "sha256" --format markdown
 ```
 
-#### 3. `explore` — Type & Member Exploration
-Explore type hierarchy, base classes, interfaces, constructors, methods, and properties:
+#### 3. `inspect` (alias `explore`, `type`) — Type & Member Inspection
+Inspect type hierarchy, base classes, interfaces, constructors, methods, and properties:
 ```bash
-# Explore type by fully qualified name
-csnav explore --type "Pmad.CSharpNav.Contracts.FindReferencesRequest"
+# Inspect type by fully qualified name
+csnav inspect --type "Pmad.CSharpNav.Contracts.FindReferencesRequest"
+# Or shorthand: csnav explore --type "Pmad.CSharpNav.Contracts.FindReferencesRequest"
 
 # Exclude inherited members
-csnav explore --type "Pmad.CSharpNav.Contracts.FindReferencesRequest" --no-inherited
+csnav inspect --type "Pmad.CSharpNav.Contracts.FindReferencesRequest" --no-inherited
 
 # By source file location
-csnav explore --file src/Pmad.CSharpNav.Domain/SymbolKind.cs --line 8 --column 12
+csnav inspect --file src/Pmad.CSharpNav.Domain/SymbolKind.cs --line 8 --column 12
 ```
 
 #### 4. `decompile` — Decompile External Assemblies
