@@ -1,0 +1,10 @@
+# Force Git to normalize line endings to LF (auto approach)
+* text=auto eol=lf
+
+# Safety net: explicitly exclude common binaries
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.dll binary
+*.exe binary
+*.pdb binary
