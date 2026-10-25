@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.MSBuild;
 using Microsoft.CodeAnalysis.Text;
@@ -28,6 +29,7 @@ public sealed class RoslynSolutionWorkspace : ISolutionWorkspace, IDisposable
 
     public RoslynSolutionWorkspace(string targetPath)
     {
+        RoslynLocator.EnsureRegistered();
         _targetPath = Path.GetFullPath(targetPath);
     }
 
@@ -212,6 +214,7 @@ public sealed class RoslynSolutionWorkspace : ISolutionWorkspace, IDisposable
         return Task.FromResult(status);
     }
 
+    [MethodImpl(MethodImplOptions.NoInlining)]
     private async Task LoadSolutionInternalAsync(CancellationToken ct)
     {
         var oldWorkspace = _workspace;

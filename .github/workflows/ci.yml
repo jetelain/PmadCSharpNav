@@ -50,6 +50,8 @@ jobs:
 
       - name: Test
         run: dotnet test -c Release --no-build
+        env:
+          DOTNET_ROOT: ${{ env.DOTNET_ROOT }}
 
       - name: Pack
         run: dotnet pack -c Release --no-build -p:Version=${{ env.VERSION }} -o ./artifacts
