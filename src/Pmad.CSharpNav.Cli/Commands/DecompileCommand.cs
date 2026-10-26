@@ -38,12 +38,15 @@ public static class DecompileCommand
 
             var specifiedSolution = parseResult.GetValue(globals.SolutionOption);
             var framework = parseResult.GetValue(globals.FrameworkOption);
-            var format = parseResult.GetValue(globals.FormatOption) ?? "markdown";
+            var format = parseResult.GetValue(globals.FormatOption) ?? GlobalOptions.GetDefaultFormat();
+            var noColor = parseResult.GetValue(globals.NoColorOption);
+            var useColor = ConsoleColorizer.ShouldUseColor(noColor);
+            var theme = useColor ? ColorTheme.Default : ColorTheme.None;
 
             if (string.IsNullOrWhiteSpace(assembly) && string.IsNullOrWhiteSpace(type) &&
                 string.IsNullOrWhiteSpace(symbol) && string.IsNullOrWhiteSpace(file))
             {
-                await Console.Error.WriteLineAsync("Error: Target must be specified via --type/--assembly, --symbol, or --file.");
+                await Console.Error.WriteLineAsync($"{theme.Error("Error:")} Target must be specified via --type/--assembly, --symbol, or --file.");
                 return 1;
             }
 
@@ -63,7 +66,7 @@ public static class DecompileCommand
                 var response = await client.PostAsync<DecompileRequest, DecompileResponse>(
                     solutionPath, "/api/decompile", req, ct);
 
-                var output = OutputFormatter.FormatDecompile(response, format);
+                var output = OutputFormatter.FormatDecompile(response, format, useColor: useColor);
                 Console.WriteLine(output);
                 return 0;
             }
@@ -76,13 +79,13 @@ public static class DecompileCommand
                 }
                 else
                 {
-                    await Console.Error.WriteLineAsync($"Error [{ex.Code}]: {ex.Message}");
+                    await Console.Error.WriteLineAsync($"{theme.Error($"Error [{ex.Code}]:")} {ex.Message}");
                 }
                 return 1;
             }
             catch (Exception ex)
             {
-                await Console.Error.WriteLineAsync($"Error: {ex.Message}");
+                await Console.Error.WriteLineAsync($"{theme.Error("Error:")} {ex.Message}");
                 return 1;
             }
         });

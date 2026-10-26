@@ -41,11 +41,14 @@ public static class SearchCommand
 
             var specifiedSolution = parseResult.GetValue(globals.SolutionOption);
             var framework = parseResult.GetValue(globals.FrameworkOption);
-            var format = parseResult.GetValue(globals.FormatOption) ?? "markdown";
+            var format = parseResult.GetValue(globals.FormatOption) ?? GlobalOptions.GetDefaultFormat();
+            var noColor = parseResult.GetValue(globals.NoColorOption);
+            var useColor = ConsoleColorizer.ShouldUseColor(noColor);
+            var theme = useColor ? ColorTheme.Default : ColorTheme.None;
 
             if (string.IsNullOrWhiteSpace(pattern) && string.IsNullOrWhiteSpace(doc))
             {
-                await Console.Error.WriteLineAsync("Error: Either search pattern or --doc must be specified.");
+                await Console.Error.WriteLineAsync($"{theme.Error("Error:")} Either search pattern or --doc must be specified.");
                 return 1;
             }
 
@@ -65,7 +68,7 @@ public static class SearchCommand
                 var response = await client.PostAsync<SearchApiRequest, SearchApiResponse>(
                     solutionPath, "/api/api-search", req, ct);
 
-                var output = OutputFormatter.FormatApiSearch(response, format);
+                var output = OutputFormatter.FormatApiSearch(response, format, useColor: useColor);
                 Console.WriteLine(output);
                 return 0;
             }
@@ -78,13 +81,13 @@ public static class SearchCommand
                 }
                 else
                 {
-                    await Console.Error.WriteLineAsync($"Error [{ex.Code}]: {ex.Message}");
+                    await Console.Error.WriteLineAsync($"{theme.Error($"Error [{ex.Code}]:")} {ex.Message}");
                 }
                 return 1;
             }
             catch (Exception ex)
             {
-                await Console.Error.WriteLineAsync($"Error: {ex.Message}");
+                await Console.Error.WriteLineAsync($"{theme.Error("Error:")} {ex.Message}");
                 return 1;
             }
         });
