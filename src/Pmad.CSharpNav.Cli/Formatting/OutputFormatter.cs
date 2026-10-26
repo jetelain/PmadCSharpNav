@@ -63,6 +63,133 @@ public static class OutputFormatter
         return sb.ToString().TrimEnd();
     }
 
+    public static string FormatDefinition(FindDefinitionResponse res, string? format = null, string? baseDirectory = null, bool useColor = false)
+    {
+        if (string.IsNullOrWhiteSpace(format)) format = GlobalOptions.GetDefaultFormat();
+        baseDirectory ??= Directory.GetCurrentDirectory();
+
+        if (format.Equals("json", StringComparison.OrdinalIgnoreCase))
+        {
+            var relRes = res.ToRelativePaths(baseDirectory);
+            return NavJsonSerializer.Serialize(relRes);
+        }
+
+        var theme = useColor ? ColorTheme.Default : ColorTheme.None;
+        var sb = new StringBuilder();
+        var relTargetDef = PathHelper.MakeRelative(res.Target.DefinedIn, baseDirectory);
+
+        if (format.Equals("markdown", StringComparison.OrdinalIgnoreCase))
+        {
+            sb.AppendLine(CultureInfo.InvariantCulture, $"{theme.Dim("###")} {theme.Bold("Definition for")} `{theme.Symbol(res.Target.Name)}` ({theme.Kind(res.Target.Kind)})");
+            if (res.Target.ContainingType != null) sb.AppendLine(CultureInfo.InvariantCulture, $"{theme.Dim("-")} {theme.Bold("**Type:**")} `{theme.Symbol(res.Target.ContainingType)}`");
+            if (relTargetDef != null) sb.AppendLine(CultureInfo.InvariantCulture, $"{theme.Dim("-")} {theme.Bold("**Defined In:**")} `{theme.Location(relTargetDef)}:{res.Target.Line}`");
+            sb.AppendLine(CultureInfo.InvariantCulture, $"{theme.Dim("-")} {theme.Bold("**Total Definitions:**")} {res.TotalDefinitions}");
+            sb.AppendLine();
+            sb.AppendLine(CultureInfo.InvariantCulture, $"{theme.TableBorder("|")} {theme.TableHeader("Location")} {theme.TableBorder("|")} {theme.TableHeader("Kind")} {theme.TableBorder("|")} {theme.TableHeader("Containing Member")} {theme.TableBorder("|")} {theme.TableHeader("Snippet")} {theme.TableBorder("|")}");
+            sb.AppendLine(theme.TableBorder("| :--- | :--- | :--- | :--- |"));
+            foreach (var d in res.Definitions)
+            {
+                string loc;
+                if (d.IsMetadata)
+                {
+                    loc = $"[Metadata] {d.AssemblyName ?? "External"}";
+                }
+                else
+                {
+                    var relFile = PathHelper.MakeRelative(d.File, baseDirectory) ?? d.File;
+                    loc = $"{relFile}:{d.Line}:{d.Column}";
+                }
+                var snip = d.Snippet?.Replace("|", "\\|", StringComparison.Ordinal).Replace("\r", "", StringComparison.Ordinal).Replace("\n", " ", StringComparison.Ordinal) ?? (d.SymbolId ?? "");
+                sb.AppendLine(CultureInfo.InvariantCulture, $"{theme.TableBorder("|")} `{theme.Location(loc)}` {theme.TableBorder("|")} {theme.Kind(d.Kind)} {theme.TableBorder("|")} {(d.ContainingMember != null ? theme.Member(d.ContainingMember) : "-")} {theme.TableBorder("|")} `{theme.Snippet(snip)}` {theme.TableBorder("|")}");
+            }
+        }
+        else
+        {
+            sb.AppendLine(CultureInfo.InvariantCulture, $"{theme.Bold("Target:")} {theme.Symbol(res.Target.Name)} ({theme.Kind(res.Target.Kind)})");
+            if (relTargetDef != null)
+            {
+                sb.AppendLine(CultureInfo.InvariantCulture, $"  {theme.Dim("Defined In:")} {theme.Location(relTargetDef)}:{res.Target.Line}");
+            }
+            sb.AppendLine(CultureInfo.InvariantCulture, $"{theme.Bold("Definitions")} ({res.Definitions.Count} of {res.TotalDefinitions}):");
+            foreach (var d in res.Definitions)
+            {
+                if (d.IsMetadata)
+                {
+                    sb.AppendLine(CultureInfo.InvariantCulture, $"  [{theme.Kind("Metadata")}] {theme.Assembly(d.AssemblyName ?? "External")} {theme.Dim(d.SymbolId ?? "")}");
+                }
+                else
+                {
+                    var relFile = PathHelper.MakeRelative(d.File, baseDirectory) ?? d.File;
+                    var loc = $"{relFile}:{d.Line}:{d.Column}";
+                    var memberStr = d.ContainingMember != null ? $" in {theme.Member(d.ContainingMember)}" : "";
+                    sb.AppendLine(CultureInfo.InvariantCulture, $"  {theme.Location(loc)} [{theme.Kind(d.Kind)}]{memberStr}");
+                    if (!string.IsNullOrWhiteSpace(d.Snippet))
+                    {
+                        sb.AppendLine(CultureInfo.InvariantCulture, $"    {theme.Snippet(d.Snippet.Trim())}");
+                    }
+                }
+            }
+        }
+
+        return sb.ToString().TrimEnd();
+    }
+
+    public static string FormatImplementations(FindImplementationsResponse res, string? format = null, string? baseDirectory = null, bool useColor = false)
+    {
+        if (string.IsNullOrWhiteSpace(format)) format = GlobalOptions.GetDefaultFormat();
+        baseDirectory ??= Directory.GetCurrentDirectory();
+
+        if (format.Equals("json", StringComparison.OrdinalIgnoreCase))
+        {
+            var relRes = res.ToRelativePaths(baseDirectory);
+            return NavJsonSerializer.Serialize(relRes);
+        }
+
+        var theme = useColor ? ColorTheme.Default : ColorTheme.None;
+        var sb = new StringBuilder();
+        var relTargetDef = PathHelper.MakeRelative(res.Target.DefinedIn, baseDirectory);
+
+        if (format.Equals("markdown", StringComparison.OrdinalIgnoreCase))
+        {
+            sb.AppendLine(CultureInfo.InvariantCulture, $"{theme.Dim("###")} {theme.Bold("Implementations for")} `{theme.Symbol(res.Target.Name)}` ({theme.Kind(res.Target.Kind)})");
+            if (res.Target.ContainingType != null) sb.AppendLine(CultureInfo.InvariantCulture, $"{theme.Dim("-")} {theme.Bold("**Type:**")} `{theme.Symbol(res.Target.ContainingType)}`");
+            if (relTargetDef != null) sb.AppendLine(CultureInfo.InvariantCulture, $"{theme.Dim("-")} {theme.Bold("**Defined In:**")} `{theme.Location(relTargetDef)}:{res.Target.Line}`");
+            sb.AppendLine(CultureInfo.InvariantCulture, $"{theme.Dim("-")} {theme.Bold("**Total Implementations:**")} {res.TotalImplementations}");
+            sb.AppendLine();
+            sb.AppendLine(CultureInfo.InvariantCulture, $"{theme.TableBorder("|")} {theme.TableHeader("Location")} {theme.TableBorder("|")} {theme.TableHeader("Kind")} {theme.TableBorder("|")} {theme.TableHeader("Containing Type")} {theme.TableBorder("|")} {theme.TableHeader("Snippet")} {theme.TableBorder("|")}");
+            sb.AppendLine(theme.TableBorder("| :--- | :--- | :--- | :--- |"));
+            foreach (var i in res.Implementations)
+            {
+                var relFile = PathHelper.MakeRelative(i.File, baseDirectory) ?? i.File;
+                var loc = $"{relFile}:{i.Line}:{i.Column}";
+                var snip = i.Snippet?.Replace("|", "\\|", StringComparison.Ordinal).Replace("\r", "", StringComparison.Ordinal).Replace("\n", " ", StringComparison.Ordinal) ?? "";
+                sb.AppendLine(CultureInfo.InvariantCulture, $"{theme.TableBorder("|")} `{theme.Location(loc)}` {theme.TableBorder("|")} {theme.Kind(i.Kind)} {theme.TableBorder("|")} {(i.ContainingType != null ? theme.Member(i.ContainingType) : "-")} {theme.TableBorder("|")} `{theme.Snippet(snip)}` {theme.TableBorder("|")}");
+            }
+        }
+        else
+        {
+            sb.AppendLine(CultureInfo.InvariantCulture, $"{theme.Bold("Target:")} {theme.Symbol(res.Target.Name)} ({theme.Kind(res.Target.Kind)})");
+            if (relTargetDef != null)
+            {
+                sb.AppendLine(CultureInfo.InvariantCulture, $"  {theme.Dim("Defined In:")} {theme.Location(relTargetDef)}:{res.Target.Line}");
+            }
+            sb.AppendLine(CultureInfo.InvariantCulture, $"{theme.Bold("Implementations")} ({res.Implementations.Count} of {res.TotalImplementations}):");
+            foreach (var i in res.Implementations)
+            {
+                var relFile = PathHelper.MakeRelative(i.File, baseDirectory) ?? i.File;
+                var loc = $"{relFile}:{i.Line}:{i.Column}";
+                var typeStr = i.ContainingType != null ? $" in {theme.Member(i.ContainingType)}" : "";
+                sb.AppendLine(CultureInfo.InvariantCulture, $"  {theme.Location(loc)} [{theme.Kind(i.Kind)}]{typeStr}");
+                if (!string.IsNullOrWhiteSpace(i.Snippet))
+                {
+                    sb.AppendLine(CultureInfo.InvariantCulture, $"    {theme.Snippet(i.Snippet.Trim())}");
+                }
+            }
+        }
+
+        return sb.ToString().TrimEnd();
+    }
+
     public static string FormatApiSearch(SearchApiResponse res, string? format = null, bool useColor = false)
     {
         if (string.IsNullOrWhiteSpace(format)) format = GlobalOptions.GetDefaultFormat();

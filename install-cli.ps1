@@ -70,6 +70,23 @@ if (Test-Path $userCacheDir) {
 # 3. Install or Update Global Tool
 Write-Host "`n[3/3] Installing or updating global dotnet tool '$toolCommand'..." -ForegroundColor Gray
 
+# Stop any running csnav daemon / server processes that might be locking the tool files in ~/.dotnet/tools/.store
+try {
+    $runningDaemons = Get-CimInstance Win32_Process -Filter "Name = 'dotnet.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -like "*Pmad.CSharpNav.Server.dll*" -or $_.CommandLine -like "*pmad.csharpnav*" }
+    if ($runningDaemons) {
+        Write-Host "Stopping running csnav server daemon(s) locking the tool directory..." -ForegroundColor Yellow
+        foreach ($proc in $runningDaemons) {
+            Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue
+        }
+        Start-Sleep -Milliseconds 500
+    }
+} catch {
+    # Ignore CIM errors on platforms where Win32_Process is not supported
+}
+
+Get-Process csnav -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+
 $installArgs = @("--add-source", $packageOutputDir, "--no-cache")
 $nupkgFile = Get-ChildItem "$packageOutputDir\$packageName.*.nupkg" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 if ($nupkgFile -and $nupkgFile.Name -match "^$packageName\.(.+)\.nupkg$") {
@@ -85,8 +102,12 @@ $isInstalled = $installedTools -match "(?i)\b$packageName\b"
 
 if ($Force -and $isInstalled) {
     Write-Host "[Force] Uninstalling existing global tool if present..." -ForegroundColor Yellow
-    & dotnet tool uninstall -g $packageName | Out-Null
-    $isInstalled = $false
+    & dotnet tool uninstall -g $packageName
+    if ($LASTEXITCODE -eq 0) {
+        $isInstalled = $false
+    } else {
+        Write-Warning "Failed to uninstall existing tool. Proceeding with update instead..."
+    }
 }
 
 if ($isInstalled) {

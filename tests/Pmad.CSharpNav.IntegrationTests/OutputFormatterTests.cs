@@ -362,4 +362,90 @@ public sealed class OutputFormatterTests
             Environment.SetEnvironmentVariable("NO_COLOR", originalNoColor);
         }
     }
+
+    [Fact]
+    public void FormatDefinition_DefaultsToMarkdown_AndSupportsJsonAndText()
+    {
+        var response = new FindDefinitionResponse(
+            Target: new DefinitionTargetDto(
+                Name: "GetOrder",
+                Kind: "Method",
+                ContainingType: "MyApp.IOrderRepository",
+                DefinedIn: "C:\\MyApp\\IOrderRepository.cs",
+                Line: 60),
+            TotalDefinitions: 1,
+            Offset: 0,
+            Limit: 50,
+            Truncated: false,
+            Definitions:
+            [
+                new DefinitionItemDto(
+                    File: "C:\\MyApp\\IOrderRepository.cs",
+                    Line: 60,
+                    Column: 16,
+                    Kind: "Method",
+                    ContainingMember: "GetOrder",
+                    ContainingType: "MyApp.IOrderRepository",
+                    Snippet: "Order? GetOrder(int id);")
+            ]);
+
+        // Markdown default
+        var mdOutput = OutputFormatter.FormatDefinition(response);
+        mdOutput.Should().StartWith("### Definition for `GetOrder` (Method)");
+        mdOutput.Should().Contain("| Location | Kind | Containing Member | Snippet |");
+        mdOutput.Should().Contain("`C:\\MyApp\\IOrderRepository.cs:60:16`");
+
+        // JSON
+        var jsonOutput = OutputFormatter.FormatDefinition(response, "json");
+        jsonOutput.Should().StartWith("{").And.Contain("\"totalDefinitions\":1");
+
+        // Text
+        var textOutput = OutputFormatter.FormatDefinition(response, "text");
+        textOutput.Should().StartWith("Target: GetOrder (Method)");
+        textOutput.Should().Contain("Definitions (1 of 1):");
+        textOutput.Should().NotContain("| Location |");
+    }
+
+    [Fact]
+    public void FormatImplementations_DefaultsToMarkdown_AndSupportsJsonAndText()
+    {
+        var response = new FindImplementationsResponse(
+            Target: new ImplementationTargetDto(
+                Name: "IOrderRepository",
+                Kind: "Interface",
+                ContainingType: null,
+                DefinedIn: "C:\\MyApp\\IOrderRepository.cs",
+                Line: 10),
+            TotalImplementations: 1,
+            Offset: 0,
+            Limit: 50,
+            Truncated: false,
+            Implementations:
+            [
+                new ImplementationItemDto(
+                    File: "C:\\MyApp\\SqlOrderRepository.cs",
+                    Line: 25,
+                    Column: 14,
+                    Kind: "Implementation",
+                    ContainingType: "MyApp.SqlOrderRepository",
+                    ContainingMember: null,
+                    Snippet: "public class SqlOrderRepository : IOrderRepository")
+            ]);
+
+        // Markdown default
+        var mdOutput = OutputFormatter.FormatImplementations(response);
+        mdOutput.Should().StartWith("### Implementations for `IOrderRepository` (Interface)");
+        mdOutput.Should().Contain("| Location | Kind | Containing Type | Snippet |");
+        mdOutput.Should().Contain("`C:\\MyApp\\SqlOrderRepository.cs:25:14`");
+
+        // JSON
+        var jsonOutput = OutputFormatter.FormatImplementations(response, "json");
+        jsonOutput.Should().StartWith("{").And.Contain("\"totalImplementations\":1");
+
+        // Text
+        var textOutput = OutputFormatter.FormatImplementations(response, "text");
+        textOutput.Should().StartWith("Target: IOrderRepository (Interface)");
+        textOutput.Should().Contain("Implementations (1 of 1):");
+        textOutput.Should().NotContain("| Location |");
+    }
 }

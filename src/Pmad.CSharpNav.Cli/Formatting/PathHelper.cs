@@ -61,4 +61,40 @@ public static class PathHelper
             References = relRefs
         };
     }
+
+    public static FindDefinitionResponse ToRelativePaths(this FindDefinitionResponse response, string? baseDirectory = null)
+    {
+        baseDirectory ??= Directory.GetCurrentDirectory();
+        var targetDef = MakeRelative(response.Target.DefinedIn, baseDirectory);
+        var relTarget = response.Target with { DefinedIn = targetDef };
+        var relDefs = response.Definitions.Select(d =>
+        {
+            var relFile = MakeRelative(d.File, baseDirectory);
+            return relFile != null && relFile != d.File ? d with { File = relFile } : d;
+        }).ToList();
+
+        return response with
+        {
+            Target = relTarget,
+            Definitions = relDefs
+        };
+    }
+
+    public static FindImplementationsResponse ToRelativePaths(this FindImplementationsResponse response, string? baseDirectory = null)
+    {
+        baseDirectory ??= Directory.GetCurrentDirectory();
+        var targetDef = MakeRelative(response.Target.DefinedIn, baseDirectory);
+        var relTarget = response.Target with { DefinedIn = targetDef };
+        var relImpls = response.Implementations.Select(i =>
+        {
+            var relFile = MakeRelative(i.File, baseDirectory);
+            return relFile != null && relFile != i.File ? i with { File = relFile } : i;
+        }).ToList();
+
+        return response with
+        {
+            Target = relTarget,
+            Implementations = relImpls
+        };
+    }
 }

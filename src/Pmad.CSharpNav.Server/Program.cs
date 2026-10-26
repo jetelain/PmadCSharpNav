@@ -77,12 +77,17 @@ builder.Services.AddSingleton(securityOptions);
 
 var workspace = new RoslynSolutionWorkspace(solutionPath);
 builder.Services.AddSingleton<ISolutionWorkspace>(workspace);
-builder.Services.AddSingleton<IReferenceFinder, RoslynReferenceFinder>();
+builder.Services.AddSingleton<RoslynReferenceFinder>();
+builder.Services.AddSingleton<IReferenceFinder>(sp => sp.GetRequiredService<RoslynReferenceFinder>());
+builder.Services.AddSingleton<IDefinitionFinder>(sp => sp.GetRequiredService<RoslynReferenceFinder>());
+builder.Services.AddSingleton<IImplementationFinder>(sp => sp.GetRequiredService<RoslynReferenceFinder>());
 builder.Services.AddSingleton<ITypeExplorer, RoslynTypeExplorer>();
 builder.Services.AddSingleton<IApiSearchEngine, RoslynApiSearchEngine>();
 builder.Services.AddSingleton<IAssemblyDecompiler, ILSpyDecompiler>();
 
 builder.Services.AddTransient<FindReferencesHandler>();
+builder.Services.AddTransient<FindDefinitionHandler>();
+builder.Services.AddTransient<FindImplementationsHandler>();
 builder.Services.AddTransient<SearchApiHandler>();
 builder.Services.AddTransient<ExploreTypeHandler>();
 builder.Services.AddTransient<DecompileMemberHandler>();
@@ -153,6 +158,12 @@ app.Use(async (context, next) =>
 
 // Endpoints
 app.MapPost("/api/references", async (FindReferencesRequest req, FindReferencesHandler handler, CancellationToken ct) =>
+    Results.Json(await handler.HandleAsync(req, ct), NavJsonSerializer.Options));
+
+app.MapPost("/api/definition", async (FindDefinitionRequest req, FindDefinitionHandler handler, CancellationToken ct) =>
+    Results.Json(await handler.HandleAsync(req, ct), NavJsonSerializer.Options));
+
+app.MapPost("/api/implementations", async (FindImplementationsRequest req, FindImplementationsHandler handler, CancellationToken ct) =>
     Results.Json(await handler.HandleAsync(req, ct), NavJsonSerializer.Options));
 
 app.MapPost("/api/api-search", async (SearchApiRequest req, SearchApiHandler handler, CancellationToken ct) =>

@@ -16,7 +16,56 @@ Always prefer `csnav` over `grep` or file text searching when navigating C# code
 
 ## Command Reference
 
-### 1. `csnav references` (alias: `csnav refs`) — Find References
+### 1. `csnav definition` (alias: `csnav def`, `csnav goto-def`, `csnav find-def`) — Go to Definition
+Navigates directly to where a symbol is defined in source code, or discovers external metadata assembly and documentation comment ID.
+
+```bash
+# Go to definition by symbol name
+csnav definition --symbol "IOrderRepository.GetOrder" --format json
+# Or shorthand: csnav def --symbol "IOrderRepository.GetOrder" --format json
+
+# Go to definition at exact source location
+csnav definition --file "src/Services/OrderService.cs" --line 42 --column 18 --format json
+```
+
+**Key Options:**
+- `--symbol <name>`: Symbol name, qualified name, or doc ID (`M:...`).
+- `--file <path> --line <int> [--column <int>]`: Resolve symbol at source location.
+- `--project <name>`: Restrict definitions to a specific project.
+- `--include-generated`: Include definitions in generated code (default `false`).
+- `--format <markdown|json|text>`: Output format (default `markdown`).
+
+---
+
+### 2. `csnav implementations` (alias: `csnav impl`, `csnav goto-impl`, `csnav find-impl`) — Go to Implementation
+Finds all concrete implementations, overrides, or derived classes/interfaces for any interface, class, or member.
+
+```bash
+# Find implementations of an interface
+csnav implementations --symbol "IOrderRepository" --format json
+# Or shorthand: csnav impl --symbol "IOrderRepository" --format json
+
+# Find implementations of an interface method
+csnav implementations --symbol "IOrderRepository.GetOrder" --format json
+
+# Find implementations at exact call-site source location
+csnav implementations --file "src/Services/OrderService.cs" --line 42 --column 18 --format json
+
+# Exclude implementations residing in test projects
+csnav implementations --symbol "IOrderRepository" --exclude-tests --format json
+```
+
+**Key Options:**
+- `--symbol <name>`: Symbol name, qualified name, or doc ID (`M:...`).
+- `--file <path> --line <int> [--column <int>]`: Resolve symbol at source location.
+- `--exclude-tests`: Excludes implementations in test projects.
+- `--project <name>`: Restrict implementations to a single project.
+- `--include-generated`: Include implementations in generated code (default `false`).
+- `--format <markdown|json|text>`: Output format (default `markdown`).
+
+---
+
+### 3. `csnav references` (alias: `csnav refs`) — Find References
 Finds all usages, call sites, implementations, and reads/writes of a symbol.
 
 ```bash
@@ -45,7 +94,7 @@ csnav references --symbol "Order" --project "MyApp.Core" --format json
 
 ---
 
-### 2. `csnav search` (alias: `csnav api`, `csnav find`) — Public API & Symbol Search
+### 4. `csnav search` (alias: `csnav api`, `csnav find`) — Public API & Symbol Search
 Searches type and member declarations using wildcard patterns across source code and external referenced assemblies.
 
 ```bash
@@ -76,7 +125,7 @@ csnav search --doc "calculates sha256" --format markdown
 
 ---
 
-### 3. `csnav inspect` (alias: `csnav explore`, `csnav type`) — Type & Member Inspection
+### 5. `csnav inspect` (alias: `csnav explore`, `csnav type`) — Type & Member Inspection
 Inspects constructors, methods, properties, fields, base types, and implemented interfaces.
 
 ```bash
@@ -102,7 +151,7 @@ csnav inspect --type "MyApp.Services.OrderService" --access all --format json
 
 ---
 
-### 4. `csnav decompile` — Decompile External Assemblies
+### 6. `csnav decompile` — Decompile External Assemblies
 Decompiles external NuGet or .NET BCL libraries to readable C# source code, automatically mapping reference assemblies (`.Ref`) to runtime implementation assemblies.
 
 ```bash
@@ -123,7 +172,7 @@ csnav decompile --assembly "System.Text.Json" --type "System.Text.Json.JsonSeria
 
 ---
 
-### 5. `csnav server` — Daemon Management
+### 7. `csnav server` — Daemon Management
 Controls the warm background daemon managing the Roslyn workspace.
 
 ```bash
@@ -145,12 +194,13 @@ csnav server stop
    - Use `csnav search "*"` or `csnav search "*Service"` (or `csnav api`) with `--scope solution` to map available domain services.
    - Use `csnav inspect --type <Type> --no-inherited --format json` (or `csnav explore`) to inspect API contracts before reading full files.
 
-2. **Refactoring or Changing a Method:**
+2. **Navigating to Definitions & Implementations:**
+   - Run `csnav definition --symbol <SymbolName>` (or `csnav def`) or `csnav definition --file <Path> --line <Line>` to jump straight to where a type or member is declared.
+   - Run `csnav implementations --symbol <InterfaceName>` (or `csnav impl`) to find all concrete classes/structs implementing an interface or all overrides of a method.
+
+3. **Refactoring or Changing a Method:**
    - Before modifying a method, run `csnav references --symbol <MethodName> --exclude-tests` (or `csnav refs`) to see all production call sites.
    - Run `csnav references --symbol <MethodName>` without `--exclude-tests` to see which unit tests need updating.
-
-3. **Tracing Interface Implementations:**
-   - Run `csnav references --symbol <InterfaceName>` to find all classes implementing the interface and places injecting it.
 
 4. **Investigating External Dependencies:**
    - Use `csnav decompile --type <ExternalType>` to inspect the actual implementation when debugging third-party library behavior or framework internals.

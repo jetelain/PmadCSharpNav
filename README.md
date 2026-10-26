@@ -10,6 +10,8 @@ A high-performance, machine-oriented C# code navigation engine designed for AI c
 
 - **Blazing Fast Navigation via Daemon Architecture**: Auto-spawns a background HTTP daemon per solution on demand with loopback token security and automatic idle shutdown.
 - **Incremental Roslyn Workspace Sync**: Tracks file system changes via debounced watchers and provides instant manual synchronization for uncommitted buffer changes.
+- **Go To Definition**: Quickly navigate to where any symbol is declared in source code or inspect its external metadata assembly and documentation comment ID.
+- **Go To Implementation**: Find all concrete implementations, overrides, and derived classes/interfaces for any interface, class, or member.
 - **Reference Finding**: Resolves calls, implementations, overrides, reads/writes with snippet extraction and test exclusion.
 - **Fast Public API Search**: Search declarations and external dependencies (NuGet/BCL) with wildcard patterns and MVID-keyed disk caching.
 - **Deep Member Exploration**: Inspect type signatures, inheritance, interfaces, constructors, methods, properties, and doc comments with partial class support.
@@ -106,7 +108,38 @@ File paths returned in results (`references`, candidates) are automatically form
 
 ### Commands
 
-#### 1. `references` (alias `refs`) — Find References
+#### 1. `definition` (alias `def`, `goto-def`, `find-def`) — Go To Definition
+Navigate directly to where a symbol or identifier is defined in source or metadata:
+```bash
+# Go to definition by symbol name
+csnav definition --symbol "IOrderRepository.GetOrder"
+# Or shorthand: csnav def --symbol "IOrderRepository.GetOrder"
+
+# Go to definition at source location (1-indexed line and column)
+csnav definition --file src/Services/OrderService.cs --line 83 --column 34
+
+# Format as JSON or text
+csnav definition --symbol "Order" --format json
+```
+
+#### 2. `implementations` (alias `impl`, `goto-impl`, `find-impl`) — Go To Implementation
+Find all concrete implementations, overrides, or derived types:
+```bash
+# Find implementations of an interface
+csnav implementations --symbol "IOrderRepository"
+# Or shorthand: csnav impl --symbol "IOrderRepository"
+
+# Find implementations of an interface method or virtual member
+csnav implementations --symbol "IOrderRepository.GetOrder"
+
+# Find implementations by source location where member is called
+csnav implementations --file src/Services/OrderService.cs --line 83 --column 34
+
+# Exclude implementations residing in test projects
+csnav implementations --symbol "IOrderRepository" --exclude-tests
+```
+
+#### 3. `references` (alias `refs`) — Find References
 Find all usages, call sites, implementations, or overrides of a symbol or source location:
 ```bash
 # By symbol name
@@ -123,7 +156,7 @@ csnav references --file src/Pmad.CSharpNav.Contracts/NavConstants.cs --line 5 --
 csnav references --symbol "FindReferencesRequest" --format json
 ```
 
-#### 2. `search` (alias `api`, `find`) — Search Public API Signatures
+#### 4. `search` (alias `api`, `find`) — Search Public API Signatures
 Search public type and member signatures across source code and referenced libraries:
 ```bash
 # Search by name pattern
@@ -137,7 +170,7 @@ csnav search "Nav*" --scope solution
 csnav search --doc "sha256" --format markdown
 ```
 
-#### 3. `inspect` (alias `explore`, `type`) — Type & Member Inspection
+#### 5. `inspect` (alias `explore`, `type`) — Type & Member Inspection
 Inspect type hierarchy, base classes, interfaces, constructors, methods, and properties:
 ```bash
 # Inspect type by fully qualified name
@@ -151,7 +184,7 @@ csnav inspect --type "Pmad.CSharpNav.Contracts.FindReferencesRequest" --no-inher
 csnav inspect --file src/Pmad.CSharpNav.Domain/SymbolKind.cs --line 8 --column 12
 ```
 
-#### 4. `decompile` — Decompile External Assemblies
+#### 6. `decompile` — Decompile External Assemblies
 Decompile BCL or NuGet library types and members to C# source code:
 ```bash
 # Decompile standard library type
@@ -161,7 +194,7 @@ csnav decompile --type "System.Uri"
 csnav decompile --type "System.Uri" --member "IsLoopback"
 ```
 
-#### 5. `server` — Manage Background Daemon
+#### 7. `server` — Manage Background Daemon
 Control and inspect the background daemon for the active solution:
 ```bash
 # Check daemon status

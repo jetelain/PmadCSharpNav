@@ -21,20 +21,21 @@ public sealed class FindReferencesHandler
 
         SymbolResolutionResult? targetResult = null;
 
-        if (!string.IsNullOrWhiteSpace(request.File) && request.Line.HasValue && request.Column.HasValue)
+        if (!string.IsNullOrWhiteSpace(request.File) && request.Line.HasValue)
         {
+            var col = request.Column ?? 1;
             targetResult = await _finder.ResolveSymbolAtLocationAsync(
                 snapshot,
                 request.File,
                 request.Line.Value,
-                request.Column.Value,
+                col,
                 ct);
 
             if (targetResult == null)
             {
                 throw new NavException(
                     "SYMBOL_NOT_FOUND",
-                    $"No symbol found at {request.File}:{request.Line}:{request.Column}");
+                    $"No symbol found at {request.File}:{request.Line}:{col}");
             }
         }
         else if (!string.IsNullOrWhiteSpace(request.Symbol))
@@ -68,7 +69,7 @@ public sealed class FindReferencesHandler
         }
         else
         {
-            throw new NavException("INVALID_REQUEST", "Either Symbol or File+Line+Column must be provided.");
+            throw new NavException("INVALID_REQUEST", "Either Symbol or File+Line (+Column) must be provided.");
         }
 
         var searchOptions = new ReferenceSearchOptions(

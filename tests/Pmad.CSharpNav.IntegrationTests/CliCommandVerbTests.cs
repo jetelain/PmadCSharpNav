@@ -15,10 +15,42 @@ public sealed class CliCommandVerbTests
 
         using var client = new NavDaemonClient();
         root.Add(ReferencesCommand.Create(globals, client));
+        root.Add(DefinitionCommand.Create(globals, client));
+        root.Add(ImplementationsCommand.Create(globals, client));
         root.Add(SearchCommand.Create(globals, client));
         root.Add(InspectCommand.Create(globals, client));
         root.Add(DecompileCommand.Create(globals, client));
         return root;
+    }
+
+    [Theory]
+    [InlineData("definition --symbol MyClass")]
+    [InlineData("definitions --symbol MyClass")]
+    [InlineData("def --symbol MyClass")]
+    [InlineData("goto-def --symbol MyClass")]
+    [InlineData("find-def --symbol MyClass")]
+    public void Definition_Command_And_Aliases_Parse_Successfully(string commandLine)
+    {
+        var root = CreateTestRoot();
+        var parseResult = root.Parse(commandLine);
+
+        parseResult.Errors.Should().BeEmpty();
+        parseResult.CommandResult.Command.Name.Should().Be("definition");
+    }
+
+    [Theory]
+    [InlineData("implementations --symbol IMyInterface")]
+    [InlineData("implementation --symbol IMyInterface")]
+    [InlineData("impl --symbol IMyInterface")]
+    [InlineData("goto-impl --symbol IMyInterface")]
+    [InlineData("find-impl --symbol IMyInterface")]
+    public void Implementations_Command_And_Aliases_Parse_Successfully(string commandLine)
+    {
+        var root = CreateTestRoot();
+        var parseResult = root.Parse(commandLine);
+
+        parseResult.Errors.Should().BeEmpty();
+        parseResult.CommandResult.Command.Name.Should().Be("implementations");
     }
 
     [Theory]
