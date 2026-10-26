@@ -40,7 +40,8 @@ csnav references --symbol "Order" --project "MyApp.Core" --format json
 - `--exclude-tests`: Excludes usages in test projects (matches `*.Tests`, `*.Test`, etc.).
 - `--project <name>`: Restrict references to a single project.
 - `--limit <int>`: Max results (default `100`).
-- `--format <markdown|json|text>`: Output format (default `markdown`).
+- `--format <markdown|json|text>`: Output format (default `markdown`, configurable via `CSNAV_FORMAT` or `CSNAV_DEFAULT_FORMAT` env var).
+- `--no-color`: Disable ANSI color formatting (colors enabled for markdown and text by default unless output is redirected).
 
 ---
 
@@ -156,4 +157,5 @@ csnav server stop
 
 5. **Token Efficiency:**
    - Prefer `--format json` for automated processing and data extraction.
+   - File paths are automatically returned relative to current working directory (`pwd`), significantly reducing token overhead.
    - Use `--limit` when searching broad patterns to avoid unnecessary token usage.

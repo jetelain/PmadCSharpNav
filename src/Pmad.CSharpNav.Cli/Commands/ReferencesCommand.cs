@@ -53,11 +53,14 @@ public static class ReferencesCommand
 
             var specifiedSolution = parseResult.GetValue(globals.SolutionOption);
             var framework = parseResult.GetValue(globals.FrameworkOption);
-            var format = parseResult.GetValue(globals.FormatOption) ?? "markdown";
+            var format = parseResult.GetValue(globals.FormatOption) ?? GlobalOptions.GetDefaultFormat();
+            var noColor = parseResult.GetValue(globals.NoColorOption);
+            var useColor = ConsoleColorizer.ShouldUseColor(noColor);
+            var theme = useColor ? ColorTheme.Default : ColorTheme.None;
 
             if (string.IsNullOrWhiteSpace(symbol) && string.IsNullOrWhiteSpace(file))
             {
-                await Console.Error.WriteLineAsync("Error: Either --symbol or --file (with optional --line and --column) must be specified.");
+                await Console.Error.WriteLineAsync($"{theme.Error("Error:")} Either --symbol or --file (with optional --line and --column) must be specified.");
                 return 1;
             }
 
@@ -81,7 +84,7 @@ public static class ReferencesCommand
                 var response = await client.PostAsync<FindReferencesRequest, FindReferencesResponse>(
                     solutionPath, "/api/references", req, ct);
 
-                var output = OutputFormatter.FormatReferences(response, format);
+                var output = OutputFormatter.FormatReferences(response, format, baseDirectory: null, useColor: useColor);
                 Console.WriteLine(output);
                 return 0;
             }
@@ -89,20 +92,22 @@ public static class ReferencesCommand
             {
                 if (format.Equals("json", StringComparison.OrdinalIgnoreCase))
                 {
-                    var errResponse = new ErrorResponse(Error: ex.Code, Message: ex.Message, Code: ex.Code, Candidates: ex.Candidates);
+                    var relCandidates = ex.Candidates?.Select(c => c with { DefinedIn = PathHelper.MakeRelative(c.DefinedIn) }).ToList();
+                    var errResponse = new ErrorResponse(Error: ex.Code, Message: ex.Message, Code: ex.Code, Candidates: relCandidates);
                     Console.WriteLine(NavJsonSerializer.Serialize(errResponse));
                 }
                 else
                 {
-                    await Console.Error.WriteLineAsync($"Error [{ex.Code}]: {ex.Message}");
+                    await Console.Error.WriteLineAsync($"{theme.Error($"Error [{ex.Code}]:")} {ex.Message}");
                     if (ex.Candidates != null && ex.Candidates.Count > 0)
                     {
-                        await Console.Error.WriteLineAsync("Matching candidates:");
+                        await Console.Error.WriteLineAsync(theme.Bold("Matching candidates:"));
                         foreach (var c in ex.Candidates)
                         {
-                            var loc = c.DefinedIn != null ? $" ({c.DefinedIn}:{c.Line})" : "";
-                            var id = c.SymbolId != null ? $" [ID: {c.SymbolId}]" : "";
-                            await Console.Error.WriteLineAsync($"  - {c.Signature}{loc}{id}");
+                            var relDef = PathHelper.MakeRelative(c.DefinedIn);
+                            var loc = relDef != null ? $" ({theme.Location(relDef)}:{c.Line})" : "";
+                            var id = c.SymbolId != null ? $" [ID: {theme.Dim(c.SymbolId)}]" : "";
+                            await Console.Error.WriteLineAsync($"  - {theme.Symbol(c.Signature)}{loc}{id}");
                         }
                     }
                 }
@@ -110,7 +115,7 @@ public static class ReferencesCommand
             }
             catch (Exception ex)
             {
-                await Console.Error.WriteLineAsync($"Error: {ex.Message}");
+                await Console.Error.WriteLineAsync($"{theme.Error("Error:")} {ex.Message}");
                 return 1;
             }
         });

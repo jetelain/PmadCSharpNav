@@ -97,7 +97,10 @@ csnav skills show
 All commands support the following options:
 - `-s, --solution <path>`: Path to `.slnx`, `.sln`, `.csproj`, or directory (auto-detected by walking up parent directories if omitted).
 - `-f, --framework <tfm>`: Target framework filter (e.g. `net10.0`) when multi-targeting.
-- `--format <format>`: Output format: `markdown` (default), `json`, or `text`.
+- `--format <format>`: Output format: `markdown` (default), `json`, or `text` (configurable via `CSNAV_FORMAT` or `CSNAV_DEFAULT_FORMAT` environment variable).
+- `--no-color`: Disable ANSI color formatting (colors enabled for markdown and text by default unless output is redirected or `NO_COLOR` is set).
+
+File paths returned in results (`references`, candidates) are automatically formatted relative to the current working directory (`pwd`) for compactness and readability.
 
 ---
 
