@@ -9,10 +9,11 @@ A high-performance, machine-oriented C# code navigation engine designed for AI c
 ## Key Features
 
 - **Blazing Fast Navigation via Daemon Architecture**: Auto-spawns a background HTTP daemon per solution on demand with loopback token security and automatic idle shutdown.
-- **Incremental Roslyn Workspace Sync**: Tracks file system changes via debounced watchers and provides instant manual synchronization for uncommitted buffer changes.
-- **Go To Definition**: Quickly navigate to where any symbol is declared in source code or inspect its external metadata assembly and documentation comment ID.
-- **Go To Implementation**: Find all concrete implementations, overrides, and derived classes/interfaces for any interface, class, or member.
-- **Reference Finding**: Resolves calls, implementations, overrides, reads/writes with snippet extraction and test exclusion.
+- **Incremental Roslyn Workspace Sync**: Tracks file system changes via debounced watchers for `.cs`, `.razor`, and `.cshtml` files and provides instant manual synchronization for uncommitted buffer changes.
+- **First-Class Razor & CSHTML Support**: Full navigation support across Blazor components (`.razor`) and ASP.NET Core views (`.cshtml`). Using Roslyn source generators and mapped line spans (`#line`), definitions, implementations, and references map directly back to original `.razor` / `.cshtml` files with real disk code snippet extraction.
+- **Go To Definition**: Quickly navigate to where any symbol is declared in source code (C# or Razor/CSHTML) or inspect its external metadata assembly and documentation comment ID.
+- **Go To Implementation**: Find all concrete implementations, overrides, and derived classes/interfaces for any interface, class, or member (including `@implements` in Blazor components).
+- **Reference Finding**: Resolves calls, implementations, overrides, reads/writes across C# and Razor files with snippet extraction and test exclusion.
 - **Fast Public API Search**: Search declarations and external dependencies (NuGet/BCL) with wildcard patterns and MVID-keyed disk caching.
 - **Deep Member Exploration**: Inspect type signatures, inheritance, interfaces, constructors, methods, properties, and doc comments with partial class support.
 - **External Library Decompiler**: Built on `ICSharpCode.Decompiler` (ILSpy) to decompile external types and methods, automatically resolving reference assemblies (`Microsoft.NETCore.App.Ref`) to runtime implementation assemblies.
@@ -109,23 +110,24 @@ File paths returned in results (`references`, candidates) are automatically form
 ### Commands
 
 #### 1. `definition` (alias `def`, `goto-def`, `find-def`) — Go To Definition
-Navigate directly to where a symbol or identifier is defined in source or metadata:
+Navigate directly to where a symbol or identifier is defined in source or metadata (supports `.cs`, `.razor`, and `.cshtml` files):
 ```bash
 # Go to definition by symbol name
 csnav definition --symbol "IOrderRepository.GetOrder"
 # Or shorthand: csnav def --symbol "IOrderRepository.GetOrder"
 
-# Go to definition at source location (1-indexed line and column)
+# Go to definition at source location (1-indexed line and column, works in .cs, .razor, or .cshtml)
 csnav definition --file src/Services/OrderService.cs --line 83 --column 34
+csnav definition --file src/Web/Components/OrderCard.razor --line 15 --column 20
 
 # Format as JSON or text
 csnav definition --symbol "Order" --format json
 ```
 
 #### 2. `implementations` (alias `impl`, `goto-impl`, `find-impl`) — Go To Implementation
-Find all concrete implementations, overrides, or derived types:
+Find all concrete implementations, overrides, or derived types (including Blazor components using `@implements`):
 ```bash
-# Find implementations of an interface
+# Find implementations of an interface (finds C# classes and Blazor .razor components)
 csnav implementations --symbol "IOrderRepository"
 # Or shorthand: csnav impl --symbol "IOrderRepository"
 
@@ -140,7 +142,7 @@ csnav implementations --symbol "IOrderRepository" --exclude-tests
 ```
 
 #### 3. `references` (alias `refs`) — Find References
-Find all usages, call sites, implementations, or overrides of a symbol or source location:
+Find all usages, call sites, implementations, or overrides of a symbol or source location (searches across `.cs`, `.razor`, and `.cshtml` files):
 ```bash
 # By symbol name
 csnav references --symbol "NavConstants"
@@ -149,8 +151,9 @@ csnav references --symbol "NavConstants"
 # Exclude references in test projects
 csnav references --symbol "NavConstants" --exclude-tests
 
-# By file location (1-indexed line and column)
+# By file location (1-indexed line and column, works for .cs, .razor, or .cshtml)
 csnav references --file src/Pmad.CSharpNav.Contracts/NavConstants.cs --line 5 --column 25
+csnav references --file src/Web/Components/OrderCard.razor --line 12 --column 18
 
 # Format as JSON
 csnav references --symbol "FindReferencesRequest" --format json

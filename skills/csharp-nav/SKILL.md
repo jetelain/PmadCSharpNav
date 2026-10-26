@@ -1,6 +1,6 @@
 ---
 name: csharp-nav
-description: High-performance C# navigation engine for AI agents and developers. Use when navigating, searching, or exploring C# codebases. Supports finding references, searching public APIs, exploring type hierarchies and members, and decompiling external BCL/NuGet assemblies.
+description: High-performance C# navigation engine for AI agents and developers. Use when navigating, searching, or exploring C# codebases (including Blazor .razor and ASP.NET Core .cshtml files). Supports finding references, searching public APIs, exploring type hierarchies and members, and decompiling external BCL/NuGet assemblies.
 ---
 
 # C# Code Navigation with `csnav`
@@ -9,6 +9,7 @@ description: High-performance C# navigation engine for AI agents and developers.
 
 Always prefer `csnav` over `grep` or file text searching when navigating C# code:
 - **Semantic Awareness**: Understands inheritance, overrides, interface implementations, and call sites without noise from comments, strings, or similarly named variables.
+- **First-Class Razor & CSHTML Support**: Transparently navigates Blazor components (`.razor`) and ASP.NET Core views (`.cshtml`). Roslyn source generator output and mapped line spans (`#line`) are translated back to original files with exact line numbers and disk code snippets.
 - **Token Efficiency**: Returns structured data directly (`--format json`) or clean summaries (`--format markdown`), saving context window tokens.
 - **Warm Daemon**: Solutions are kept indexed in memory and automatically kept in sync via file watchers.
 
@@ -24,8 +25,9 @@ Navigates directly to where a symbol is defined in source code, or discovers ext
 csnav definition --symbol "IOrderRepository.GetOrder" --format json
 # Or shorthand: csnav def --symbol "IOrderRepository.GetOrder" --format json
 
-# Go to definition at exact source location
+# Go to definition at exact source location (supports .cs, .razor, and .cshtml)
 csnav definition --file "src/Services/OrderService.cs" --line 42 --column 18 --format json
+csnav definition --file "src/Web/Components/OrderCard.razor" --line 15 --column 20 --format json
 ```
 
 **Key Options:**
@@ -41,7 +43,7 @@ csnav definition --file "src/Services/OrderService.cs" --line 42 --column 18 --f
 Finds all concrete implementations, overrides, or derived classes/interfaces for any interface, class, or member.
 
 ```bash
-# Find implementations of an interface
+# Find implementations of an interface (finds C# classes and Blazor .razor components)
 csnav implementations --symbol "IOrderRepository" --format json
 # Or shorthand: csnav impl --symbol "IOrderRepository" --format json
 
@@ -76,8 +78,9 @@ csnav references --symbol "ProcessOrder" --format json
 # Exclude references in test projects
 csnav references --symbol "IOrderRepository.SaveOrder" --exclude-tests --format json
 
-# Find references at exact source file location (1-indexed line and column)
+# Find references at exact source file location (1-indexed line and column, works in .cs, .razor, or .cshtml)
 csnav references --file "src/Services/OrderService.cs" --line 42 --column 18 --format json
+csnav references --file "src/Web/Components/OrderCard.razor" --line 12 --column 18 --format json
 
 # Filter references to a specific project
 csnav references --symbol "Order" --project "MyApp.Core" --format json
@@ -209,3 +212,8 @@ csnav server stop
    - Prefer `--format json` for automated processing and data extraction.
    - File paths are automatically returned relative to current working directory (`pwd`), significantly reducing token overhead.
    - Use `--limit` when searching broad patterns to avoid unnecessary token usage.
+
+6. **Navigating Blazor & Razor Files (`.razor`, `.cshtml`):**
+   - You can pass `.razor` or `.cshtml` files directly to `--file` for `definition`, `implementations`, or `references`.
+   - References will include usages in Blazor component templates and `@code` blocks with snippet previews extracted directly from the Razor file.
+   - Interface implementations (e.g. `@implements IDisposable` or `@implements IComponent`) are discovered automatically.

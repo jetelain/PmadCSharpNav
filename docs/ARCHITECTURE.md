@@ -13,6 +13,10 @@
    - **Search for APIs**: Query symbols across local source code and referenced libraries (NuGet & BCL) by name and XML documentation.
    - **Explore Members**: Inspect class/variable members, hierarchies, signatures, and docstrings (Object Explorer / IntelliSense for AI).
    - **Decompile External Code**: Decompile classes or individual methods from external NuGet/BCL assemblies into clean C# source.
+5. **First-Class Razor & CSHTML Support**:
+   - Transparently navigate Blazor components (`.razor`) and ASP.NET Core views/pages (`.cshtml`).
+   - Uses Roslyn's native source generator pipeline and mapped line span (`#line`) directives to translate symbol locations, definitions, implementations, and call sites directly back to the original `.razor` and `.cshtml` files on disk with accurate 1-indexed lines and character columns.
+
 
 ---
 
@@ -117,15 +121,16 @@ Defines business rules, orchestrates data flow, and declares port interfaces.
 Contains the concrete adapters implementing Application ports:
 
 * **Roslyn Implementations**:
-  - `RoslynSolutionWorkspace`: Wraps `MSBuildWorkspace`. Loads `.sln` or `.csproj`. Maintains the immutable `Solution` and current `Compilation` references.
-  - `RoslynReferenceFinder`: Uses `Microsoft.CodeAnalysis.FindSymbols.SymbolFinder` to resolve references, constructors, call sites, and interface implementations across projects.
+  - `RoslynSolutionWorkspace`: Wraps `MSBuildWorkspace`. Loads `.sln` or `.csproj`. Maintains the immutable `Solution` and current `Compilation` references. Synchronizes standard `.cs` documents as well as `.razor` and `.cshtml` files as `AdditionalDocument`s (`Solution.WithAdditionalDocumentText`, `AddAdditionalDocument`, `RemoveAdditionalDocument`).
+  - `RoslynWorkspaceSnapshot`: Provides atomic snapshot isolation. Ensures Roslyn source generators (such as the Razor compiler source generator) execute via `project.GetSourceGeneratedDocumentsAsync()` when analyzer references exist, and provides helpers for additional document lookups and `#line` directive tree mapping.
+  - `RoslynReferenceFinder`: Uses `Microsoft.CodeAnalysis.FindSymbols.SymbolFinder` to resolve references, constructors, call sites, and interface implementations across projects. Translates locations using `Location.GetMappedLineSpan()` so that symbols declared or referenced in `.razor` and `.cshtml` files map to their real file paths, 1-indexed line/column positions, and code snippets extracted directly from disk rather than generated `.g.cs` files (clearing `isGenerated` for mapped user files). Also supports reverse lookup (`ResolveSymbolInMappedFileAsync`) when resolving queries targeting positions inside `.razor` / `.cshtml` files.
   - `RoslynApiSearchEngine`: Uses `SymbolFinder.FindSourceDeclarationsAsync` and cached external metadata symbols (`IAssemblySymbol.GlobalNamespace`) with an inverted index for fast keyword/XML doc lookups.
   - `RoslynTypeExplorer`: Resolves `INamedTypeSymbol` or infers types via `SemanticModel.GetTypeInfo()` / `GetSymbolInfo()`.
   - `RoslynMetadataResolver`: Maps an external assembly symbol or name to its physical `.dll` location (via `Compilation.GetMetadataReference`, NuGet global cache, or runtime packs).
 * **Decompiler Implementation**:
   - `ILSpyDecompiler`: Uses `ICSharpCode.Decompiler.CSharp.CSharpDecompiler`. Supports decompiling an entire type or extracting a single method/property definition using `EntityHandle`.
 * **File System & Caching**:
-  - `DebouncedFileWatcher`: Monitors directory for `.cs`, `.csproj`, `.sln`/`.slnx`, `Directory.Build.*`, `Directory.Packages.props` and `.editorconfig` changes. Ignores `bin/` and `obj/`. Dispatches debounced update events (changed, added, deleted, renamed).
+  - `DebouncedFileWatcher`: Monitors directory for `.cs`, `.razor`, `.cshtml`, `.csproj`, `.sln`/`.slnx`, `Directory.Build.*`, `Directory.Packages.props` and `.editorconfig` changes. Ignores `bin/` and `obj/`. Dispatches debounced update events (changed, added, deleted, renamed).
 
 ### 3.4. `Pmad.CSharpNav.Server` (Daemon Host)
 A lightweight background host process running on `localhost`.
@@ -377,12 +382,13 @@ graph LR
 ```
 
 ### 5.3. File Watcher & Synchronization Strategy
-1. **Source File Change (`*.cs`)** (timings are targets, not guarantees; `FindReferences` on large solutions can take seconds):
+1. **Source File Change (`*.cs`, `*.razor`, `*.cshtml`)** (timings are targets, not guarantees; `FindReferences` on large solutions can take seconds):
    - `DebouncedFileWatcher` catches file modification.
    - Debounces by 150ms (handles editor auto-save bursts or multi-file git updates).
-   - Maps file path to `DocumentId`.
-   - Calls `solution = solution.WithDocumentText(documentId, newText)`.
-   - **Added / deleted / renamed files** map to `AddDocument` / `RemoveDocument` (rename = remove + add) on the owning project(s), identified from the project's include globs.
+   - Maps file path to `DocumentId` (or `AdditionalDocumentId` for `.razor` / `.cshtml`).
+   - For `.cs` files, calls `solution = solution.WithDocumentText(documentId, newText)`.
+   - For `.razor` and `.cshtml` files, calls `solution = solution.WithAdditionalDocumentText(additionalDocId, newText)`. When the compilation is evaluated, Roslyn's Razor source generator consumes the updated additional document to regenerate C# models.
+   - **Added / deleted / renamed files** map to `AddDocument` / `RemoveDocument` or `AddAdditionalDocument` / `RemoveAdditionalDocument` on the owning project(s), identified from the project's directory hierarchy.
    - Files under `bin/` and `obj/` are ignored (generated sources come from the Roslyn generator pipeline).
 2. **Project File Change (`*.csproj`, `Directory.Build.props`, `.sln`)**:
    - `MSBuildWorkspace` loads once and does not track project changes. Changes to project files, `Directory.Build.*`, `Directory.Packages.props`, `.editorconfig` or `global.json` trigger a background re-open of the solution.
