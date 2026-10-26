@@ -25,7 +25,10 @@ public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder,
     {
         var roslynSnapshot = (RoslynWorkspaceSnapshot)snapshot;
         var docId = roslynSnapshot.FindDocumentId(file);
-        if (docId == null) return null;
+        if (docId == null)
+        {
+            return await ResolveSymbolInMappedFileAsync(roslynSnapshot, file, line, column, ct);
+        }
 
         var document = roslynSnapshot.Solution.GetDocument(docId);
         if (document == null) return null;
@@ -66,10 +69,98 @@ public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder,
         var target = MapSymbolToIdentifier(symbol);
         var targetKind = MapSymbolKind(symbol);
         var definedLoc = symbol.Locations.FirstOrDefault(l => l.IsInSource);
-        var definedFile = definedLoc?.SourceTree?.FilePath;
-        var definedLine = definedLoc != null ? definedLoc.GetLineSpan().StartLinePosition.Line + 1 : (int?)null;
+        var (definedFile, definedLine, _) = GetMappedLocation(definedLoc);
 
         return new SymbolResolutionResult(target, definedFile, definedLine, targetKind);
+    }
+
+    private static async Task<SymbolResolutionResult?> ResolveSymbolInMappedFileAsync(
+        RoslynWorkspaceSnapshot roslynSnapshot,
+        string file,
+        int line,
+        int column,
+        CancellationToken ct)
+    {
+        var fullPath = Path.GetFullPath(file);
+        var normalizedPath = RoslynWorkspaceSnapshot.NormalizePath(fullPath);
+        var targetLine = Math.Max(0, line - 1);
+        var targetCol = Math.Max(0, column - 1);
+
+        foreach (var project in roslynSnapshot.Solution.Projects)
+        {
+            var compilation = await roslynSnapshot.GetCompilationAsync(project.Id, ct);
+            if (compilation == null) continue;
+
+            foreach (var tree in compilation.SyntaxTrees)
+            {
+                if (!RoslynWorkspaceSnapshot.SyntaxTreeMapsToFile(tree, normalizedPath))
+                {
+                    continue;
+                }
+
+                var root = await tree.GetRootAsync(ct);
+                SyntaxToken? bestToken = null;
+
+                foreach (var token in root.DescendantTokens())
+                {
+                    if (token.RawKind == (int)SyntaxKind.EndOfFileToken || string.IsNullOrWhiteSpace(token.Text))
+                    {
+                        continue;
+                    }
+
+                    var mapped = token.GetLocation().GetMappedLineSpan();
+                    if (!mapped.HasMappedPath || !string.Equals(RoslynWorkspaceSnapshot.NormalizePath(mapped.Path), normalizedPath, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    if (mapped.StartLinePosition.Line <= targetLine && mapped.EndLinePosition.Line >= targetLine)
+                    {
+                        var onStartLine = mapped.StartLinePosition.Line == targetLine;
+                        var onEndLine = mapped.EndLinePosition.Line == targetLine;
+
+                        if ((!onStartLine || mapped.StartLinePosition.Character <= targetCol) &&
+                            (!onEndLine || mapped.EndLinePosition.Character >= targetCol))
+                        {
+                            bestToken = token;
+                            break;
+                        }
+                    }
+                }
+
+                if (bestToken == null) continue;
+
+                var node = bestToken.Value.Parent;
+                if (node == null) continue;
+
+                var semanticModel = compilation.GetSemanticModel(tree);
+                var symbol = semanticModel.GetSymbolInfo(node, ct).Symbol
+                             ?? semanticModel.GetDeclaredSymbol(node, ct);
+
+                if (symbol == null)
+                {
+                    var parent = node.Parent;
+                    while (parent != null && symbol == null)
+                    {
+                        symbol = semanticModel.GetSymbolInfo(parent, ct).Symbol
+                                 ?? semanticModel.GetDeclaredSymbol(parent, ct);
+                        parent = parent.Parent;
+                    }
+                }
+
+                if (symbol != null)
+                {
+                    var target = MapSymbolToIdentifier(symbol);
+                    var targetKind = MapSymbolKind(symbol);
+                    var definedLoc = symbol.Locations.FirstOrDefault(l => l.IsInSource);
+                    var (definedFile, definedLine, _) = GetMappedLocation(definedLoc);
+
+                    return new SymbolResolutionResult(target, definedFile, definedLine, targetKind);
+                }
+            }
+        }
+
+        return null;
     }
 
     public async Task<IReadOnlyList<SymbolResolutionResult>> ResolveSymbolsByNameAsync(
@@ -94,8 +185,7 @@ public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder,
                     var target = MapSymbolToIdentifier(sym);
                     var targetKind = MapSymbolKind(sym);
                     var loc = sym.Locations.FirstOrDefault(l => l.IsInSource);
-                    var defFile = loc?.SourceTree?.FilePath;
-                    var defLine = loc != null ? loc.GetLineSpan().StartLinePosition.Line + 1 : (int?)null;
+                    var (defFile, defLine, _) = GetMappedLocation(loc);
                     results.Add(new SymbolResolutionResult(target, defFile, defLine, targetKind));
                     return results;
                 }
@@ -140,8 +230,7 @@ public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder,
                     {
                         var target = MapSymbolToIdentifier(ctor);
                         var loc = ctor.Locations.FirstOrDefault(l => l.IsInSource) ?? symbol.Locations.FirstOrDefault(l => l.IsInSource);
-                        var defFile = loc?.SourceTree?.FilePath;
-                        var defLine = loc != null ? loc.GetLineSpan().StartLinePosition.Line + 1 : (int?)null;
+                        var (defFile, defLine, _) = GetMappedLocation(loc);
                         results.Add(new SymbolResolutionResult(target, defFile, defLine, DomainSymbolKind.Constructor));
                     }
                 }
@@ -179,8 +268,7 @@ public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder,
                     var target = MapSymbolToIdentifier(symbol);
                     var targetKind = MapSymbolKind(symbol);
                     var loc = symbol.Locations.FirstOrDefault(l => l.IsInSource);
-                    var defFile = loc?.SourceTree?.FilePath;
-                    var defLine = loc != null ? loc.GetLineSpan().StartLinePosition.Line + 1 : (int?)null;
+                    var (defFile, defLine, _) = GetMappedLocation(loc);
 
                     results.Add(new SymbolResolutionResult(target, defFile, defLine, targetKind));
                 }
@@ -209,6 +297,7 @@ public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder,
 
         var referencedSymbols = await SymbolFinder.FindReferencesAsync(resolvedSymbol, solution, ct);
         var results = new List<DomainReferenceLocation>();
+        var mappedSourceTextCache = new Dictionary<string, SourceText>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var refSymbol in referencedSymbols)
         {
@@ -243,15 +332,30 @@ public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder,
                     }
                 }
 
-                var sourceText = await location.Document.GetTextAsync(ct);
-                var lineSpan = location.Location.GetLineSpan();
-                var lineIndex = lineSpan.StartLinePosition.Line;
-                var colIndex = lineSpan.StartLinePosition.Character + 1;
+                var mappedSpan = location.Location.GetMappedLineSpan();
+                var isMapped = mappedSpan.HasMappedPath && !string.IsNullOrWhiteSpace(mappedSpan.Path);
+                var filePath = isMapped ? mappedSpan.Path : location.Document.FilePath;
+                var lineIndex = isMapped ? mappedSpan.StartLinePosition.Line : location.Location.GetLineSpan().StartLinePosition.Line;
+                var colIndex = (isMapped ? mappedSpan.StartLinePosition.Character : location.Location.GetLineSpan().StartLinePosition.Character) + 1;
 
-                var isGenerated = IsGeneratedFile(location.Document.FilePath);
+                var isGenerated = !isMapped && IsGeneratedFile(location.Document.FilePath);
                 if (!options.IncludeGenerated && isGenerated)
                 {
                     continue;
+                }
+
+                SourceText sourceText;
+                if (isMapped && File.Exists(filePath))
+                {
+                    if (!mappedSourceTextCache.TryGetValue(filePath, out sourceText!))
+                    {
+                        sourceText = SourceText.From(await File.ReadAllTextAsync(filePath, ct));
+                        mappedSourceTextCache[filePath] = sourceText;
+                    }
+                }
+                else
+                {
+                    sourceText = await location.Document.GetTextAsync(ct);
                 }
 
                 // Extract context snippet (1-3 lines)
@@ -275,7 +379,7 @@ public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder,
                 var kind = ClassifyReference(token?.Parent);
 
                 results.Add(new DomainReferenceLocation(
-                    File: location.Document.FilePath,
+                    File: filePath,
                     Line: lineIndex + 1,
                     Column: colIndex,
                     Snippet: snippet,
@@ -320,22 +424,32 @@ public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder,
         List<DomainReferenceLocation> results,
         ReferenceSearchOptions options)
     {
-        var filePath = loc.SourceTree?.FilePath;
-        if (filePath == null) return;
+        var (targetFile, line, col) = GetMappedLocation(loc);
+        if (targetFile == null || line == null) return;
 
-        var isGen = IsGeneratedFile(filePath);
+        var mapped = loc.GetMappedLineSpan();
+        var isMapped = mapped.HasMappedPath && !string.IsNullOrWhiteSpace(mapped.Path);
+        var isGen = !isMapped && IsGeneratedFile(loc.SourceTree?.FilePath ?? targetFile);
         if (!options.IncludeGenerated && isGen) return;
 
-        var lineSpan = loc.GetLineSpan();
-        var line = lineSpan.StartLinePosition.Line + 1;
-        var col = lineSpan.StartLinePosition.Character + 1;
-
-        var snippet = loc.SourceTree?.GetText().Lines[line - 1].ToString().Trim() ?? "";
+        string snippet;
+        if (isMapped && File.Exists(targetFile))
+        {
+            var lines = File.ReadLines(targetFile).Take(line.Value).ToList();
+            snippet = lines.Count >= line.Value ? lines[line.Value - 1].Trim() : "";
+        }
+        else
+        {
+            var text = loc.SourceTree?.GetText();
+            snippet = text != null && line.Value - 1 < text.Lines.Count
+                ? text.Lines[line.Value - 1].ToString().Trim()
+                : "";
+        }
 
         results.Add(new DomainReferenceLocation(
-            File: filePath,
-            Line: line,
-            Column: col,
+            File: targetFile,
+            Line: line.Value,
+            Column: col ?? 1,
             Snippet: snippet,
             ContainingMember: null,
             Kind: kind,
@@ -420,6 +534,28 @@ public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder,
         filePath.Contains(@"\obj\", StringComparison.OrdinalIgnoreCase) ||
         filePath.Contains("/obj/", StringComparison.OrdinalIgnoreCase);
 
+    private static (string? FilePath, int? Line, int? Column) GetMappedLocation(Location? loc)
+    {
+        if (loc == null || !loc.IsInSource) return (null, null, null);
+
+        var mapped = loc.GetMappedLineSpan();
+        if (mapped.HasMappedPath && !string.IsNullOrWhiteSpace(mapped.Path))
+        {
+            return (
+                mapped.Path,
+                mapped.IsValid ? mapped.StartLinePosition.Line + 1 : null,
+                mapped.IsValid ? mapped.StartLinePosition.Character + 1 : null
+            );
+        }
+
+        var lineSpan = loc.GetLineSpan();
+        return (
+            loc.SourceTree?.FilePath,
+            lineSpan.IsValid ? lineSpan.StartLinePosition.Line + 1 : null,
+            lineSpan.IsValid ? lineSpan.StartLinePosition.Character + 1 : null
+        );
+    }
+
     private static SymbolIdentifier MapSymbolToIdentifier(ISymbol symbol)
     {
         return new SymbolIdentifier(
@@ -486,10 +622,12 @@ public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder,
         {
             foreach (var loc in sourceLocations)
             {
-                var filePath = loc.SourceTree?.FilePath;
+                var mapped = loc.GetMappedLineSpan();
+                var isMapped = mapped.HasMappedPath && !string.IsNullOrWhiteSpace(mapped.Path);
+                var filePath = isMapped ? mapped.Path : loc.SourceTree?.FilePath;
                 if (filePath == null) continue;
 
-                var isGen = IsGeneratedFile(filePath);
+                var isGen = !isMapped && IsGeneratedFile(loc.SourceTree?.FilePath ?? filePath);
                 if (!options.IncludeGenerated && isGen) continue;
 
                 var document = roslynSnapshot.Solution.GetDocument(loc.SourceTree);
@@ -513,12 +651,19 @@ public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder,
                     }
                 }
 
-                var lineSpan = loc.GetLineSpan();
-                var line = lineSpan.StartLinePosition.Line + 1;
-                var col = lineSpan.StartLinePosition.Character + 1;
+                var line = (isMapped ? mapped.StartLinePosition.Line : loc.GetLineSpan().StartLinePosition.Line) + 1;
+                var col = (isMapped ? mapped.StartLinePosition.Character : loc.GetLineSpan().StartLinePosition.Character) + 1;
 
-                var sourceText = await loc.SourceTree!.GetTextAsync(ct);
-                var snippet = ExtractSnippet(sourceText, lineSpan.StartLinePosition.Line);
+                SourceText sourceText;
+                if (isMapped && File.Exists(filePath))
+                {
+                    sourceText = SourceText.From(await File.ReadAllTextAsync(filePath, ct));
+                }
+                else
+                {
+                    sourceText = await loc.SourceTree!.GetTextAsync(ct);
+                }
+                var snippet = ExtractSnippet(sourceText, line - 1);
 
                 results.Add(new DefinitionLocation(
                     File: filePath,
@@ -615,10 +760,12 @@ public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder,
         {
             foreach (var loc in target.Locations.Where(l => l.IsInSource && l.SourceTree != null))
             {
-                var filePath = loc.SourceTree?.FilePath;
+                var mapped = loc.GetMappedLineSpan();
+                var isMapped = mapped.HasMappedPath && !string.IsNullOrWhiteSpace(mapped.Path);
+                var filePath = isMapped ? mapped.Path : loc.SourceTree?.FilePath;
                 if (filePath == null) continue;
 
-                var isGen = IsGeneratedFile(filePath);
+                var isGen = !isMapped && IsGeneratedFile(loc.SourceTree?.FilePath ?? filePath);
                 if (!options.IncludeGenerated && isGen) continue;
 
                 var document = roslynSnapshot.Solution.GetDocument(loc.SourceTree);
@@ -647,12 +794,19 @@ public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder,
                     }
                 }
 
-                var lineSpan = loc.GetLineSpan();
-                var line = lineSpan.StartLinePosition.Line + 1;
-                var col = lineSpan.StartLinePosition.Character + 1;
+                var line = (isMapped ? mapped.StartLinePosition.Line : loc.GetLineSpan().StartLinePosition.Line) + 1;
+                var col = (isMapped ? mapped.StartLinePosition.Character : loc.GetLineSpan().StartLinePosition.Character) + 1;
 
-                var sourceText = await loc.SourceTree!.GetTextAsync(ct);
-                var snippet = ExtractSnippet(sourceText, lineSpan.StartLinePosition.Line);
+                SourceText sourceText;
+                if (isMapped && File.Exists(filePath))
+                {
+                    sourceText = SourceText.From(await File.ReadAllTextAsync(filePath, ct));
+                }
+                else
+                {
+                    sourceText = await loc.SourceTree!.GetTextAsync(ct);
+                }
+                var snippet = ExtractSnippet(sourceText, line - 1);
 
                 results.Add(new ImplementationLocation(
                     File: filePath,

@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Pmad.CSharpNav.Application.Ports;
 
 namespace Pmad.CSharpNav.Infrastructure.Workspace;
@@ -32,12 +33,24 @@ public sealed class RoslynWorkspaceSnapshot : IWorkspaceSnapshot
     {
         return _compilationCache.GetOrAdd(
             projectId,
-            id =>
+            async id =>
             {
                 var project = Solution.GetProject(id);
-                return project != null
-                    ? project.GetCompilationAsync(ct)
-                    : Task.FromResult<Compilation?>(null);
+                if (project == null) return null;
+
+                if (project.AnalyzerReferences.Count > 0)
+                {
+                    try
+                    {
+                        _ = await project.GetSourceGeneratedDocumentsAsync(ct);
+                    }
+                    catch
+                    {
+                        // Fall back to standard compilation if generator execution fails
+                    }
+                }
+
+                return await project.GetCompilationAsync(ct);
             });
     }
 
@@ -110,6 +123,66 @@ public sealed class RoslynWorkspaceSnapshot : IWorkspaceSnapshot
         }
 
         return projects.FirstOrDefault();
+    }
+
+    public DocumentId? FindAdditionalDocumentId(string filePath)
+    {
+        var normalized = NormalizePath(filePath);
+
+        foreach (var project in Solution.Projects)
+        {
+            foreach (var doc in project.AdditionalDocuments)
+            {
+                if (doc.FilePath != null && string.Equals(NormalizePath(doc.FilePath), normalized, StringComparison.OrdinalIgnoreCase))
+                {
+                    return doc.Id;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    public IReadOnlyList<DocumentId> GetAdditionalDocumentIds(string filePath)
+    {
+        var normalized = NormalizePath(filePath);
+        var list = new List<DocumentId>();
+
+        foreach (var project in Solution.Projects)
+        {
+            foreach (var doc in project.AdditionalDocuments)
+            {
+                if (doc.FilePath != null && string.Equals(NormalizePath(doc.FilePath), normalized, StringComparison.OrdinalIgnoreCase))
+                {
+                    list.Add(doc.Id);
+                }
+            }
+        }
+
+        return list;
+    }
+
+    public static bool SyntaxTreeMapsToFile(SyntaxTree tree, string normalizedMappedFilePath)
+    {
+        var root = tree.GetRoot();
+        foreach (var directive in root.DescendantNodes(descendIntoTrivia: true).OfType<DirectiveTriviaSyntax>())
+        {
+            if (directive is LineSpanDirectiveTriviaSyntax spanDir &&
+                spanDir.File.ValueText is string path1 &&
+                string.Equals(NormalizePath(path1), normalizedMappedFilePath, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (directive is LineDirectiveTriviaSyntax lineDir &&
+                lineDir.File.ValueText is string path2 &&
+                string.Equals(NormalizePath(path2), normalizedMappedFilePath, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public static string NormalizePath(string path) =>

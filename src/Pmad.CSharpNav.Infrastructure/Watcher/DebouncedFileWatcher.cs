@@ -73,7 +73,7 @@ public sealed class DebouncedFileWatcher : IDisposable
             _pendingProjectReload = true;
             ScheduleFlush();
         }
-        else if (ext == ".cs")
+        else if (IsSourceFile(ext))
         {
             _pendingSourceChanges[fullPath] = 1;
             ScheduleFlush();
@@ -153,6 +153,11 @@ public sealed class DebouncedFileWatcher : IDisposable
         }
 
         return false;
+    }
+
+    public static bool IsSourceFile(string extension)
+    {
+        return extension is ".cs" or ".razor" or ".cshtml";
     }
 
     public void Dispose()
