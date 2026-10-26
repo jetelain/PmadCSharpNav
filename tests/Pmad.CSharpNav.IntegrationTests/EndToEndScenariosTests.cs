@@ -578,5 +578,121 @@ public sealed class EndToEndScenariosTests : IAsyncLifetime, IDisposable
         response.TotalReferences.Should().Be(1);
         response.References[0].Snippet.Should().Contain("a.Execute()");
     }
+
+    [Fact]
+    public async Task Scenario12_FindDefinition_BySymbol_And_ByLocation()
+    {
+        var defHandler = new FindDefinitionHandler(_workspace, _referenceFinder);
+
+        // 1. By symbol name
+        var symbolRequest = new FindDefinitionRequest(Symbol: "TestE2EApp.IOrderRepository.GetOrder");
+        var symbolResponse = await defHandler.HandleAsync(symbolRequest);
+
+        symbolResponse.Should().NotBeNull();
+        symbolResponse.Target.Name.Should().Contain("GetOrder");
+        symbolResponse.TotalDefinitions.Should().Be(1);
+        symbolResponse.Definitions[0].File.Should().EndWith("IOrderRepository.cs");
+        symbolResponse.Definitions[0].Snippet.Should().Contain("Order? GetOrder(int id);");
+
+        // 2. By source file location in OrderService.cs line 17 col 34 (where GetOrder is called)
+        var locRequest = new FindDefinitionRequest(
+            File: _orderServicePath,
+            Line: 17,
+            Column: 34);
+        var locResponse = await defHandler.HandleAsync(locRequest);
+
+        locResponse.Should().NotBeNull();
+        locResponse.Target.Name.Should().Contain("GetOrder");
+        locResponse.TotalDefinitions.Should().Be(1);
+        locResponse.Definitions[0].File.Should().EndWith("IOrderRepository.cs");
+        locResponse.Definitions[0].Snippet.Should().Contain("Order? GetOrder(int id);");
+    }
+
+    [Fact]
+    public async Task Scenario13_FindImplementations_ForInterface_And_InterfaceMethod()
+    {
+        var repoImplPath = Path.Combine(_tempDir, "SqlOrderRepository.cs");
+        var repoImplContent = """
+            namespace TestE2EApp;
+
+            public class SqlOrderRepository : IOrderRepository
+            {
+                public Order? GetOrder(int id) => null;
+                public void SaveOrder(Order order) { }
+            }
+            """;
+        await File.WriteAllTextAsync(repoImplPath, repoImplContent);
+        var syncHandler = new SyncDocumentHandler(_workspace);
+        await syncHandler.HandleAsync(new SyncRequest(repoImplPath, repoImplContent));
+
+        var implHandler = new FindImplementationsHandler(_workspace, _referenceFinder);
+
+        // 1. Implementations of interface type
+        var typeResponse = await implHandler.HandleAsync(new FindImplementationsRequest(
+            Symbol: "TestE2EApp.IOrderRepository"));
+
+        typeResponse.Should().NotBeNull();
+        typeResponse.Target.Name.Should().Contain("IOrderRepository");
+        typeResponse.TotalImplementations.Should().Be(1);
+        typeResponse.Implementations[0].File.Should().EndWith("SqlOrderRepository.cs");
+        typeResponse.Implementations[0].ContainingType.Should().Be("TestE2EApp.SqlOrderRepository");
+        typeResponse.Implementations[0].Kind.Should().Be("Implementation");
+
+        // 2. Implementations of interface method
+        var methodResponse = await implHandler.HandleAsync(new FindImplementationsRequest(
+            Symbol: "TestE2EApp.IOrderRepository.GetOrder"));
+
+        methodResponse.Should().NotBeNull();
+        methodResponse.TotalImplementations.Should().Be(1);
+        methodResponse.Implementations[0].File.Should().EndWith("SqlOrderRepository.cs");
+        methodResponse.Implementations[0].ContainingType.Should().Be("TestE2EApp.SqlOrderRepository");
+        methodResponse.Implementations[0].ContainingMember.Should().Be("GetOrder");
+
+        // 3. Implementations by location on the call-site in OrderService.cs:17:34
+        var locResponse = await implHandler.HandleAsync(new FindImplementationsRequest(
+            File: _orderServicePath,
+            Line: 17,
+            Column: 34));
+
+        locResponse.Should().NotBeNull();
+        locResponse.TotalImplementations.Should().Be(1);
+        locResponse.Implementations[0].File.Should().EndWith("SqlOrderRepository.cs");
+        locResponse.Implementations[0].ContainingType.Should().Be("TestE2EApp.SqlOrderRepository");
+    }
+
+    [Fact]
+    public async Task Scenario14_FindDefinition_Qualified_Symbol_Resolves_To_Correct_Type_When_Same_Member_Exists_In_Multiple_Types()
+    {
+        var path = Path.Combine(_tempDir, "ServicesMulti.cs");
+        var content = """
+            namespace TestE2EApp;
+
+            public class AlphaService
+            {
+                public void ExecuteTask() {}
+            }
+
+            public class BetaService
+            {
+                public void ExecuteTask() {}
+            }
+            """;
+        await File.WriteAllTextAsync(path, content);
+
+        var syncHandler = new SyncDocumentHandler(_workspace);
+        await syncHandler.HandleAsync(new SyncRequest(path, content));
+
+        var defHandler = new FindDefinitionHandler(_workspace, _referenceFinder);
+
+        // Resolving BetaService.ExecuteTask must specifically resolve BetaService, not AlphaService
+        var response = await defHandler.HandleAsync(new FindDefinitionRequest(
+            Symbol: "TestE2EApp.BetaService.ExecuteTask"));
+
+        response.Should().NotBeNull();
+        response.Target.ContainingType.Should().Be("TestE2EApp.BetaService");
+        response.TotalDefinitions.Should().Be(1);
+        response.Definitions[0].ContainingType.Should().Be("TestE2EApp.BetaService");
+        response.Definitions[0].ContainingMember.Should().Be("ExecuteTask");
+    }
 }
 

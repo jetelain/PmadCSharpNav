@@ -14,7 +14,7 @@ namespace Pmad.CSharpNav.Infrastructure.Adapters;
 /// <summary>
 /// Finds symbol references, call sites, implementations, and overrides across a Roslyn solution.
 /// </summary>
-public sealed class RoslynReferenceFinder : IReferenceFinder
+public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder, IImplementationFinder
 {
     public async Task<SymbolResolutionResult?> ResolveSymbolAtLocationAsync(
         IWorkspaceSnapshot snapshot,
@@ -204,43 +204,7 @@ public sealed class RoslynReferenceFinder : IReferenceFinder
         var solution = roslynSnapshot.Solution;
 
         // Resolve symbol in solution
-        ISymbol? resolvedSymbol = null;
-
-        foreach (var project in solution.Projects)
-        {
-            var compilation = await roslynSnapshot.GetCompilationAsync(project.Id, ct);
-            if (compilation == null) continue;
-
-            if (!string.IsNullOrWhiteSpace(symbol.SymbolId))
-            {
-                resolvedSymbol = Microsoft.CodeAnalysis.DocumentationCommentId.GetFirstSymbolForDeclarationId(symbol.SymbolId, compilation);
-                if (resolvedSymbol != null) break;
-            }
-
-            if (!string.IsNullOrWhiteSpace(symbol.MemberSignature))
-            {
-                var cleanMemberName = ExtractIdentifierName(symbol.MemberSignature);
-                var declarations = await SymbolFinder.FindSourceDeclarationsAsync(
-                    project,
-                    name => string.Equals(name, cleanMemberName, StringComparison.OrdinalIgnoreCase) ||
-                            string.Equals(name, symbol.MemberSignature, StringComparison.OrdinalIgnoreCase),
-                    cancellationToken: ct);
-
-                resolvedSymbol = declarations.FirstOrDefault(d =>
-                    string.IsNullOrWhiteSpace(symbol.ContainingType) ||
-                    string.Equals(d.ContainingType?.ToDisplayString(), symbol.ContainingType, StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(d.ContainingType?.Name, symbol.ContainingType, StringComparison.OrdinalIgnoreCase))
-                    ?? declarations.FirstOrDefault();
-
-                if (resolvedSymbol != null) break;
-            }
-            else if (!string.IsNullOrWhiteSpace(symbol.ContainingType))
-            {
-                resolvedSymbol = compilation.GetTypeByMetadataName(symbol.ContainingType);
-                if (resolvedSymbol != null) break;
-            }
-        }
-
+        var resolvedSymbol = await ResolveSymbolInSolutionAsync(roslynSnapshot, symbol, ct);
         if (resolvedSymbol == null) return Array.Empty<DomainReferenceLocation>();
 
         var referencedSymbols = await SymbolFinder.FindReferencesAsync(resolvedSymbol, solution, ct);
@@ -499,4 +463,275 @@ public sealed class RoslynReferenceFinder : IReferenceFinder
         }
         return clean.Trim();
     }
+
+    public async Task<IReadOnlyList<DefinitionLocation>> FindDefinitionsAsync(
+        IWorkspaceSnapshot snapshot,
+        SymbolIdentifier symbol,
+        DefinitionSearchOptions options,
+        CancellationToken ct = default)
+    {
+        var roslynSnapshot = (RoslynWorkspaceSnapshot)snapshot;
+        var solution = roslynSnapshot.Solution;
+
+        var resolvedSymbol = await ResolveSymbolInSolutionAsync(roslynSnapshot, symbol, ct);
+        if (resolvedSymbol == null) return Array.Empty<DefinitionLocation>();
+
+        var sourceDef = await SymbolFinder.FindSourceDefinitionAsync(resolvedSymbol, solution, cancellationToken: ct);
+        var targetSymbol = sourceDef ?? resolvedSymbol.OriginalDefinition ?? resolvedSymbol;
+
+        var results = new List<DefinitionLocation>();
+        var sourceLocations = targetSymbol.Locations.Where(l => l.IsInSource && l.SourceTree != null).ToList();
+
+        if (sourceLocations.Count > 0)
+        {
+            foreach (var loc in sourceLocations)
+            {
+                var filePath = loc.SourceTree?.FilePath;
+                if (filePath == null) continue;
+
+                var isGen = IsGeneratedFile(filePath);
+                if (!options.IncludeGenerated && isGen) continue;
+
+                var document = roslynSnapshot.Solution.GetDocument(loc.SourceTree);
+                if (document != null)
+                {
+                    if (!string.IsNullOrWhiteSpace(options.Project) &&
+                        !string.Equals(document.Project.Name, options.Project, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(options.Framework))
+                    {
+                        var projName = document.Project.Name;
+                        var outPath = document.Project.OutputFilePath ?? "";
+                        if (!projName.Contains(options.Framework, StringComparison.OrdinalIgnoreCase) &&
+                            !outPath.Contains(options.Framework, StringComparison.OrdinalIgnoreCase))
+                        {
+                            continue;
+                        }
+                    }
+                }
+
+                var lineSpan = loc.GetLineSpan();
+                var line = lineSpan.StartLinePosition.Line + 1;
+                var col = lineSpan.StartLinePosition.Character + 1;
+
+                var sourceText = await loc.SourceTree!.GetTextAsync(ct);
+                var snippet = ExtractSnippet(sourceText, lineSpan.StartLinePosition.Line);
+
+                results.Add(new DefinitionLocation(
+                    File: filePath,
+                    Line: line,
+                    Column: col,
+                    Snippet: snippet,
+                    ContainingMember: targetSymbol is not INamedTypeSymbol ? targetSymbol.Name : null,
+                    ContainingType: targetSymbol.ContainingType?.ToDisplayString() ?? (targetSymbol as INamedTypeSymbol)?.ToDisplayString(),
+                    Kind: MapSymbolKind(targetSymbol),
+                    IsMetadata: false,
+                    IsGenerated: isGen,
+                    SymbolId: targetSymbol.GetDocumentationCommentId()));
+            }
+        }
+        else
+        {
+            results.Add(new DefinitionLocation(
+                File: null,
+                Line: null,
+                Column: null,
+                Snippet: null,
+                ContainingMember: targetSymbol is not INamedTypeSymbol ? targetSymbol.Name : null,
+                ContainingType: targetSymbol.ContainingType?.ToDisplayString(),
+                AssemblyName: targetSymbol.ContainingAssembly?.Name,
+                Kind: MapSymbolKind(targetSymbol),
+                IsMetadata: true,
+                IsGenerated: false,
+                SymbolId: targetSymbol.GetDocumentationCommentId()));
+        }
+
+        return results
+            .GroupBy(r => (r.File, r.Line, r.Column, r.SymbolId))
+            .Select(g => g.First())
+            .ToList();
+    }
+
+    public async Task<IReadOnlyList<ImplementationLocation>> FindImplementationsAsync(
+        IWorkspaceSnapshot snapshot,
+        SymbolIdentifier symbol,
+        ImplementationSearchOptions options,
+        CancellationToken ct = default)
+    {
+        var roslynSnapshot = (RoslynWorkspaceSnapshot)snapshot;
+        var solution = roslynSnapshot.Solution;
+
+        var resolvedSymbol = await ResolveSymbolInSolutionAsync(roslynSnapshot, symbol, ct);
+        if (resolvedSymbol == null) return Array.Empty<ImplementationLocation>();
+
+        var rawTargets = new List<(ISymbol Symbol, string Kind)>();
+
+        if (resolvedSymbol is INamedTypeSymbol namedType)
+        {
+            if (namedType.TypeKind == TypeKind.Interface)
+            {
+                var impls = await SymbolFinder.FindImplementationsAsync(namedType, solution, cancellationToken: ct);
+                foreach (var impl in impls)
+                {
+                    rawTargets.Add((impl, "Implementation"));
+                }
+
+                var derivedInterfaces = await SymbolFinder.FindDerivedInterfacesAsync(namedType, solution, cancellationToken: ct);
+                foreach (var di in derivedInterfaces)
+                {
+                    rawTargets.Add((di, "DerivedInterface"));
+                }
+            }
+            else if (namedType.TypeKind == TypeKind.Class)
+            {
+                var derivedClasses = await SymbolFinder.FindDerivedClassesAsync(namedType, solution, cancellationToken: ct);
+                foreach (var dc in derivedClasses)
+                {
+                    rawTargets.Add((dc, "DerivedClass"));
+                }
+            }
+        }
+        else if (resolvedSymbol is (IMethodSymbol or IPropertySymbol or IEventSymbol))
+        {
+            var impls = await SymbolFinder.FindImplementationsAsync(resolvedSymbol, solution, cancellationToken: ct);
+            foreach (var impl in impls)
+            {
+                rawTargets.Add((impl, "Implementation"));
+            }
+
+            var overrides = await SymbolFinder.FindOverridesAsync(resolvedSymbol, solution, cancellationToken: ct);
+            foreach (var over in overrides)
+            {
+                rawTargets.Add((over, "Override"));
+            }
+        }
+
+        var results = new List<ImplementationLocation>();
+
+        foreach (var (target, kind) in rawTargets)
+        {
+            foreach (var loc in target.Locations.Where(l => l.IsInSource && l.SourceTree != null))
+            {
+                var filePath = loc.SourceTree?.FilePath;
+                if (filePath == null) continue;
+
+                var isGen = IsGeneratedFile(filePath);
+                if (!options.IncludeGenerated && isGen) continue;
+
+                var document = roslynSnapshot.Solution.GetDocument(loc.SourceTree);
+                if (document != null)
+                {
+                    if (options.ExcludeTests && IsTestProject(document.Project))
+                    {
+                        continue;
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(options.Project) &&
+                        !string.Equals(document.Project.Name, options.Project, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(options.Framework))
+                    {
+                        var projName = document.Project.Name;
+                        var outPath = document.Project.OutputFilePath ?? "";
+                        if (!projName.Contains(options.Framework, StringComparison.OrdinalIgnoreCase) &&
+                            !outPath.Contains(options.Framework, StringComparison.OrdinalIgnoreCase))
+                        {
+                            continue;
+                        }
+                    }
+                }
+
+                var lineSpan = loc.GetLineSpan();
+                var line = lineSpan.StartLinePosition.Line + 1;
+                var col = lineSpan.StartLinePosition.Character + 1;
+
+                var sourceText = await loc.SourceTree!.GetTextAsync(ct);
+                var snippet = ExtractSnippet(sourceText, lineSpan.StartLinePosition.Line);
+
+                results.Add(new ImplementationLocation(
+                    File: filePath,
+                    Line: line,
+                    Column: col,
+                    Snippet: snippet,
+                    ContainingMember: target is not INamedTypeSymbol ? target.Name : null,
+                    ContainingType: target.ContainingType?.ToDisplayString() ?? (target as INamedTypeSymbol)?.ToDisplayString(),
+                    Kind: kind,
+                    IsGenerated: isGen));
+            }
+        }
+
+        return results
+            .GroupBy(r => (r.File, r.Line, r.Column))
+            .Select(g => g.First())
+            .ToList();
+    }
+
+    private static async Task<ISymbol?> ResolveSymbolInSolutionAsync(
+        RoslynWorkspaceSnapshot roslynSnapshot,
+        SymbolIdentifier symbol,
+        CancellationToken ct)
+    {
+        var solution = roslynSnapshot.Solution;
+        ISymbol? resolvedSymbol = null;
+
+        foreach (var project in solution.Projects)
+        {
+            var compilation = await roslynSnapshot.GetCompilationAsync(project.Id, ct);
+            if (compilation == null) continue;
+
+            if (!string.IsNullOrWhiteSpace(symbol.SymbolId))
+            {
+                resolvedSymbol = Microsoft.CodeAnalysis.DocumentationCommentId.GetFirstSymbolForDeclarationId(symbol.SymbolId, compilation);
+                if (resolvedSymbol != null) break;
+            }
+
+            if (!string.IsNullOrWhiteSpace(symbol.MemberSignature))
+            {
+                var cleanMemberName = ExtractIdentifierName(symbol.MemberSignature);
+                var declarations = await SymbolFinder.FindSourceDeclarationsAsync(
+                    project,
+                    name => string.Equals(name, cleanMemberName, StringComparison.OrdinalIgnoreCase) ||
+                            string.Equals(name, symbol.MemberSignature, StringComparison.OrdinalIgnoreCase),
+                    cancellationToken: ct);
+
+                resolvedSymbol = string.IsNullOrWhiteSpace(symbol.ContainingType)
+                    ? declarations.FirstOrDefault()
+                    : declarations.FirstOrDefault(d =>
+                        string.Equals(d.ContainingType?.ToDisplayString(), symbol.ContainingType, StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(d.ContainingType?.Name, symbol.ContainingType, StringComparison.OrdinalIgnoreCase));
+
+                if (resolvedSymbol != null) break;
+            }
+            else if (!string.IsNullOrWhiteSpace(symbol.ContainingType))
+            {
+                resolvedSymbol = compilation.GetTypeByMetadataName(symbol.ContainingType);
+                if (resolvedSymbol != null) break;
+
+                var cleanTypeName = symbol.ContainingType.Contains('.')
+                    ? symbol.ContainingType[(symbol.ContainingType.LastIndexOf('.') + 1)..]
+                    : symbol.ContainingType;
+
+                var declarations = await SymbolFinder.FindSourceDeclarationsAsync(
+                    project,
+                    name => string.Equals(name, cleanTypeName, StringComparison.OrdinalIgnoreCase) ||
+                            string.Equals(name, symbol.ContainingType, StringComparison.OrdinalIgnoreCase),
+                    SymbolFilter.Type,
+                    cancellationToken: ct);
+
+                resolvedSymbol = declarations.FirstOrDefault(d =>
+                    string.Equals(d.ToDisplayString(), symbol.ContainingType, StringComparison.OrdinalIgnoreCase))
+                    ?? declarations.FirstOrDefault();
+                if (resolvedSymbol != null) break;
+            }
+        }
+
+        return resolvedSymbol;
+    }
 }
+

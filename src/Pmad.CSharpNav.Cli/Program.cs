@@ -10,6 +10,8 @@ globals.AddTo(root);
 using var client = new NavDaemonClient();
 
 root.Add(ReferencesCommand.Create(globals, client));
+root.Add(DefinitionCommand.Create(globals, client));
+root.Add(ImplementationsCommand.Create(globals, client));
 root.Add(SearchCommand.Create(globals, client));
 root.Add(InspectCommand.Create(globals, client));
 root.Add(DecompileCommand.Create(globals, client));
