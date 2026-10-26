@@ -93,13 +93,14 @@ public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder,
 
             foreach (var tree in compilation.SyntaxTrees)
             {
-                if (!RoslynWorkspaceSnapshot.SyntaxTreeMapsToFile(tree, normalizedPath))
+                if (!await RoslynWorkspaceSnapshot.SyntaxTreeMapsToFileAsync(tree, normalizedPath, ct))
                 {
                     continue;
                 }
 
                 var root = await tree.GetRootAsync(ct);
                 SyntaxToken? bestToken = null;
+                SyntaxToken? fallbackToken = null;
 
                 foreach (var token in root.DescendantTokens())
                 {
@@ -116,6 +117,11 @@ public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder,
 
                     if (mapped.StartLinePosition.Line <= targetLine && mapped.EndLinePosition.Line >= targetLine)
                     {
+                        if (fallbackToken == null)
+                        {
+                            fallbackToken = token;
+                        }
+
                         var onStartLine = mapped.StartLinePosition.Line == targetLine;
                         var onEndLine = mapped.EndLinePosition.Line == targetLine;
 
@@ -127,6 +133,8 @@ public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder,
                         }
                     }
                 }
+
+                bestToken ??= fallbackToken;
 
                 if (bestToken == null) continue;
 
@@ -303,8 +311,6 @@ public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder,
         {
             foreach (var location in refSymbol.Locations)
             {
-                if (location.Document.FilePath == null) continue;
-
                 var project = location.Document.Project;
 
                 // Filter test projects if requested
@@ -335,21 +341,25 @@ public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder,
                 var mappedSpan = location.Location.GetMappedLineSpan();
                 var isMapped = mappedSpan.HasMappedPath && !string.IsNullOrWhiteSpace(mappedSpan.Path);
                 var filePath = isMapped ? mappedSpan.Path : location.Document.FilePath;
+                if (string.IsNullOrWhiteSpace(filePath)) continue;
+
                 var lineIndex = isMapped ? mappedSpan.StartLinePosition.Line : location.Location.GetLineSpan().StartLinePosition.Line;
                 var colIndex = (isMapped ? mappedSpan.StartLinePosition.Character : location.Location.GetLineSpan().StartLinePosition.Character) + 1;
 
-                var isGenerated = !isMapped && IsGeneratedFile(location.Document.FilePath);
+                var isGenerated = !isMapped && (location.Document is SourceGeneratedDocument || IsGeneratedFile(location.Document.FilePath));
                 if (!options.IncludeGenerated && isGenerated)
                 {
                     continue;
                 }
 
                 SourceText sourceText;
-                if (isMapped && File.Exists(filePath))
+                if (isMapped)
                 {
                     if (!mappedSourceTextCache.TryGetValue(filePath, out sourceText!))
                     {
-                        sourceText = SourceText.From(await File.ReadAllTextAsync(filePath, ct));
+                        sourceText = await roslynSnapshot.GetAdditionalDocumentTextAsync(filePath, ct)
+                            ?? (File.Exists(filePath) ? SourceText.From(await File.ReadAllTextAsync(filePath, ct)) : null)
+                            ?? await location.Document.GetTextAsync(ct);
                         mappedSourceTextCache[filePath] = sourceText;
                     }
                 }
@@ -397,7 +407,7 @@ public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder,
             {
                 foreach (var loc in over.Locations.Where(l => l.IsInSource))
                 {
-                    AddLocationFromSource(loc, ReferenceKind.Override, results, options);
+                    await AddLocationFromSourceAsync(loc, ReferenceKind.Override, results, options, roslynSnapshot, mappedSourceTextCache, ct);
                 }
             }
         }
@@ -410,7 +420,7 @@ public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder,
             {
                 foreach (var loc in impl.Locations.Where(l => l.IsInSource))
                 {
-                    AddLocationFromSource(loc, ReferenceKind.Implementation, results, options);
+                    await AddLocationFromSourceAsync(loc, ReferenceKind.Implementation, results, options, roslynSnapshot, mappedSourceTextCache, ct);
                 }
             }
         }
@@ -418,11 +428,14 @@ public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder,
         return results;
     }
 
-    private static void AddLocationFromSource(
+    private static async Task AddLocationFromSourceAsync(
         Location loc,
         ReferenceKind kind,
         List<DomainReferenceLocation> results,
-        ReferenceSearchOptions options)
+        ReferenceSearchOptions options,
+        RoslynWorkspaceSnapshot roslynSnapshot,
+        Dictionary<string, SourceText> mappedSourceTextCache,
+        CancellationToken ct)
     {
         var (targetFile, line, col) = GetMappedLocation(loc);
         if (targetFile == null || line == null) return;
@@ -432,18 +445,31 @@ public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder,
         var isGen = !isMapped && IsGeneratedFile(loc.SourceTree?.FilePath ?? targetFile);
         if (!options.IncludeGenerated && isGen) return;
 
-        string snippet;
-        if (isMapped && File.Exists(targetFile))
+        string snippet = "";
+        if (isMapped)
         {
-            var lines = File.ReadLines(targetFile).Take(line.Value).ToList();
-            snippet = lines.Count >= line.Value ? lines[line.Value - 1].Trim() : "";
+            if (!mappedSourceTextCache.TryGetValue(targetFile, out var sourceText))
+            {
+                sourceText = await roslynSnapshot.GetAdditionalDocumentTextAsync(targetFile, ct)
+                    ?? (File.Exists(targetFile) ? SourceText.From(await File.ReadAllTextAsync(targetFile, ct)) : null);
+                if (sourceText != null)
+                {
+                    mappedSourceTextCache[targetFile] = sourceText;
+                }
+            }
+
+            if (sourceText != null)
+            {
+                snippet = ExtractSnippet(sourceText, line.Value - 1);
+            }
         }
         else
         {
-            var text = loc.SourceTree?.GetText();
-            snippet = text != null && line.Value - 1 < text.Lines.Count
-                ? text.Lines[line.Value - 1].ToString().Trim()
-                : "";
+            var text = loc.SourceTree != null ? await loc.SourceTree.GetTextAsync(ct) : null;
+            if (text != null && line.Value - 1 < text.Lines.Count)
+            {
+                snippet = text.Lines[line.Value - 1].ToString().Trim();
+            }
         }
 
         results.Add(new DomainReferenceLocation(
@@ -528,11 +554,12 @@ public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder,
         });
     }
 
-    private static bool IsGeneratedFile(string filePath) =>
-        filePath.EndsWith(".g.cs", StringComparison.OrdinalIgnoreCase) ||
-        filePath.EndsWith(".generated.cs", StringComparison.OrdinalIgnoreCase) ||
-        filePath.Contains(@"\obj\", StringComparison.OrdinalIgnoreCase) ||
-        filePath.Contains("/obj/", StringComparison.OrdinalIgnoreCase);
+    private static bool IsGeneratedFile(string? filePath) =>
+        !string.IsNullOrEmpty(filePath) && (
+            filePath.EndsWith(".g.cs", StringComparison.OrdinalIgnoreCase) ||
+            filePath.EndsWith(".generated.cs", StringComparison.OrdinalIgnoreCase) ||
+            filePath.Contains(@"\obj\", StringComparison.OrdinalIgnoreCase) ||
+            filePath.Contains("/obj/", StringComparison.OrdinalIgnoreCase));
 
     private static (string? FilePath, int? Line, int? Column) GetMappedLocation(Location? loc)
     {
@@ -655,9 +682,11 @@ public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder,
                 var col = (isMapped ? mapped.StartLinePosition.Character : loc.GetLineSpan().StartLinePosition.Character) + 1;
 
                 SourceText sourceText;
-                if (isMapped && File.Exists(filePath))
+                if (isMapped)
                 {
-                    sourceText = SourceText.From(await File.ReadAllTextAsync(filePath, ct));
+                    sourceText = await roslynSnapshot.GetAdditionalDocumentTextAsync(filePath, ct)
+                        ?? (File.Exists(filePath) ? SourceText.From(await File.ReadAllTextAsync(filePath, ct)) : null)
+                        ?? await loc.SourceTree!.GetTextAsync(ct);
                 }
                 else
                 {
@@ -798,9 +827,11 @@ public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder,
                 var col = (isMapped ? mapped.StartLinePosition.Character : loc.GetLineSpan().StartLinePosition.Character) + 1;
 
                 SourceText sourceText;
-                if (isMapped && File.Exists(filePath))
+                if (isMapped)
                 {
-                    sourceText = SourceText.From(await File.ReadAllTextAsync(filePath, ct));
+                    sourceText = await roslynSnapshot.GetAdditionalDocumentTextAsync(filePath, ct)
+                        ?? (File.Exists(filePath) ? SourceText.From(await File.ReadAllTextAsync(filePath, ct)) : null)
+                        ?? await loc.SourceTree!.GetTextAsync(ct);
                 }
                 else
                 {

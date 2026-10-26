@@ -42,7 +42,7 @@ public sealed class RoslynWorkspaceSnapshot : IWorkspaceSnapshot
                 {
                     try
                     {
-                        _ = await project.GetSourceGeneratedDocumentsAsync(ct);
+                        _ = await project.GetSourceGeneratedDocumentsAsync(CancellationToken.None);
                     }
                     catch
                     {
@@ -50,7 +50,15 @@ public sealed class RoslynWorkspaceSnapshot : IWorkspaceSnapshot
                     }
                 }
 
-                return await project.GetCompilationAsync(ct);
+                try
+                {
+                    return await project.GetCompilationAsync(CancellationToken.None);
+                }
+                catch
+                {
+                    _compilationCache.TryRemove(id, out _);
+                    throw;
+                }
             });
     }
 
@@ -127,13 +135,16 @@ public sealed class RoslynWorkspaceSnapshot : IWorkspaceSnapshot
 
     public DocumentId? FindAdditionalDocumentId(string filePath)
     {
+        if (string.IsNullOrWhiteSpace(filePath)) return null;
         var normalized = NormalizePath(filePath);
 
         foreach (var project in Solution.Projects)
         {
             foreach (var doc in project.AdditionalDocuments)
             {
-                if (doc.FilePath != null && string.Equals(NormalizePath(doc.FilePath), normalized, StringComparison.OrdinalIgnoreCase))
+                if (doc.FilePath != null && (
+                    string.Equals(NormalizePath(doc.FilePath), normalized, StringComparison.OrdinalIgnoreCase) ||
+                    PathMatches(filePath, doc.FilePath)))
                 {
                     return doc.Id;
                 }
@@ -141,6 +152,15 @@ public sealed class RoslynWorkspaceSnapshot : IWorkspaceSnapshot
         }
 
         return null;
+    }
+
+    public async Task<Microsoft.CodeAnalysis.Text.SourceText?> GetAdditionalDocumentTextAsync(string filePath, CancellationToken ct = default)
+    {
+        var docId = FindAdditionalDocumentId(filePath);
+        if (docId == null) return null;
+
+        var doc = Solution.GetAdditionalDocument(docId);
+        return doc != null ? await doc.GetTextAsync(ct) : null;
     }
 
     public IReadOnlyList<DocumentId> GetAdditionalDocumentIds(string filePath)
@@ -164,19 +184,29 @@ public sealed class RoslynWorkspaceSnapshot : IWorkspaceSnapshot
 
     public static bool SyntaxTreeMapsToFile(SyntaxTree tree, string normalizedMappedFilePath)
     {
-        var root = tree.GetRoot();
+        return SyntaxTreeMapsToFileInternal(tree.GetRoot(), normalizedMappedFilePath);
+    }
+
+    public static async Task<bool> SyntaxTreeMapsToFileAsync(SyntaxTree tree, string normalizedMappedFilePath, CancellationToken ct = default)
+    {
+        var root = await tree.GetRootAsync(ct);
+        return SyntaxTreeMapsToFileInternal(root, normalizedMappedFilePath);
+    }
+
+    private static bool SyntaxTreeMapsToFileInternal(SyntaxNode root, string normalizedMappedFilePath)
+    {
         foreach (var directive in root.DescendantNodes(descendIntoTrivia: true).OfType<DirectiveTriviaSyntax>())
         {
             if (directive is LineSpanDirectiveTriviaSyntax spanDir &&
-                spanDir.File.ValueText is string path1 &&
-                PathMatches(path1, normalizedMappedFilePath))
+                !string.IsNullOrWhiteSpace(spanDir.File.ValueText) &&
+                PathMatches(spanDir.File.ValueText, normalizedMappedFilePath))
             {
                 return true;
             }
 
             if (directive is LineDirectiveTriviaSyntax lineDir &&
-                lineDir.File.ValueText is string path2 &&
-                PathMatches(path2, normalizedMappedFilePath))
+                !string.IsNullOrWhiteSpace(lineDir.File.ValueText) &&
+                PathMatches(lineDir.File.ValueText, normalizedMappedFilePath))
             {
                 return true;
             }
@@ -187,14 +217,22 @@ public sealed class RoslynWorkspaceSnapshot : IWorkspaceSnapshot
 
     public static bool PathMatches(string candidatePath, string normalizedTargetPath)
     {
+        if (string.IsNullOrWhiteSpace(candidatePath) || string.IsNullOrWhiteSpace(normalizedTargetPath))
+        {
+            return false;
+        }
+
         var normCandidate = NormalizePath(candidatePath);
         if (string.Equals(normCandidate, normalizedTargetPath, StringComparison.OrdinalIgnoreCase))
         {
             return true;
         }
 
-        if (normalizedTargetPath.EndsWith("/" + normCandidate, StringComparison.OrdinalIgnoreCase) ||
-            normCandidate.EndsWith("/" + normalizedTargetPath, StringComparison.OrdinalIgnoreCase))
+        var trimmedCandidate = normCandidate.TrimStart('/');
+        var trimmedTarget = normalizedTargetPath.TrimStart('/');
+
+        if (normalizedTargetPath.EndsWith("/" + trimmedCandidate, StringComparison.OrdinalIgnoreCase) ||
+            normCandidate.EndsWith("/" + trimmedTarget, StringComparison.OrdinalIgnoreCase))
         {
             return true;
         }
