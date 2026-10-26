@@ -580,7 +580,7 @@ public sealed class EndToEndScenariosTests : IAsyncLifetime, IDisposable
     }
 
     [Fact]
-    public async Task Scenario7_FindDefinition_BySymbol_And_ByLocation()
+    public async Task Scenario12_FindDefinition_BySymbol_And_ByLocation()
     {
         var defHandler = new FindDefinitionHandler(_workspace, _referenceFinder);
 
@@ -609,7 +609,7 @@ public sealed class EndToEndScenariosTests : IAsyncLifetime, IDisposable
     }
 
     [Fact]
-    public async Task Scenario8_FindImplementations_ForInterface_And_InterfaceMethod()
+    public async Task Scenario13_FindImplementations_ForInterface_And_InterfaceMethod()
     {
         var repoImplPath = Path.Combine(_tempDir, "SqlOrderRepository.cs");
         var repoImplContent = """
@@ -658,6 +658,41 @@ public sealed class EndToEndScenariosTests : IAsyncLifetime, IDisposable
         locResponse.TotalImplementations.Should().Be(1);
         locResponse.Implementations[0].File.Should().EndWith("SqlOrderRepository.cs");
         locResponse.Implementations[0].ContainingType.Should().Be("TestE2EApp.SqlOrderRepository");
+    }
+
+    [Fact]
+    public async Task Scenario14_FindDefinition_Qualified_Symbol_Resolves_To_Correct_Type_When_Same_Member_Exists_In_Multiple_Types()
+    {
+        var path = Path.Combine(_tempDir, "ServicesMulti.cs");
+        var content = """
+            namespace TestE2EApp;
+
+            public class AlphaService
+            {
+                public void ExecuteTask() {}
+            }
+
+            public class BetaService
+            {
+                public void ExecuteTask() {}
+            }
+            """;
+        await File.WriteAllTextAsync(path, content);
+
+        var syncHandler = new SyncDocumentHandler(_workspace);
+        await syncHandler.HandleAsync(new SyncRequest(path, content));
+
+        var defHandler = new FindDefinitionHandler(_workspace, _referenceFinder);
+
+        // Resolving BetaService.ExecuteTask must specifically resolve BetaService, not AlphaService
+        var response = await defHandler.HandleAsync(new FindDefinitionRequest(
+            Symbol: "TestE2EApp.BetaService.ExecuteTask"));
+
+        response.Should().NotBeNull();
+        response.Target.ContainingType.Should().Be("TestE2EApp.BetaService");
+        response.TotalDefinitions.Should().Be(1);
+        response.Definitions[0].ContainingType.Should().Be("TestE2EApp.BetaService");
+        response.Definitions[0].ContainingMember.Should().Be("ExecuteTask");
     }
 }
 

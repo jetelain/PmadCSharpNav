@@ -51,6 +51,7 @@ public sealed class OutputFormatterTests
         var defaultOutput = OutputFormatter.FormatReferences(response);
         defaultOutput.Should().StartWith("### References for `MyMethod` (Method)");
         defaultOutput.Should().Contain("| Location | Kind | Containing Member | Snippet |");
+        defaultOutput.Should().Contain("| :--- | :--- | :--- | :--- | :--- |");
         defaultOutput.Should().Contain("| `C:\\MyApp\\Consumer.cs:20:12` | Invocation | Run | `myClass.MyMethod();` |");
 
         // Explicit markdown
@@ -392,7 +393,8 @@ public sealed class OutputFormatterTests
         // Markdown default
         var mdOutput = OutputFormatter.FormatDefinition(response);
         mdOutput.Should().StartWith("### Definition for `GetOrder` (Method)");
-        mdOutput.Should().Contain("| Location | Kind | Containing Member | Snippet |");
+        mdOutput.Should().Contain("| Location | Kind | Containing Type | Snippet |");
+        mdOutput.Should().Contain("| :--- | :--- | :--- | :--- | :--- |");
         mdOutput.Should().Contain("`C:\\MyApp\\IOrderRepository.cs:60:16`");
 
         // JSON
@@ -403,6 +405,7 @@ public sealed class OutputFormatterTests
         var textOutput = OutputFormatter.FormatDefinition(response, "text");
         textOutput.Should().StartWith("Target: GetOrder (Method)");
         textOutput.Should().Contain("Definitions (1 of 1):");
+        textOutput.Should().Contain("in MyApp.IOrderRepository");
         textOutput.Should().NotContain("| Location |");
     }
 
@@ -436,6 +439,7 @@ public sealed class OutputFormatterTests
         var mdOutput = OutputFormatter.FormatImplementations(response);
         mdOutput.Should().StartWith("### Implementations for `IOrderRepository` (Interface)");
         mdOutput.Should().Contain("| Location | Kind | Containing Type | Snippet |");
+        mdOutput.Should().Contain("| :--- | :--- | :--- | :--- | :--- |");
         mdOutput.Should().Contain("`C:\\MyApp\\SqlOrderRepository.cs:25:14`");
 
         // JSON

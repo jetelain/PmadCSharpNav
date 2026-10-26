@@ -520,26 +520,12 @@ public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder,
                 var sourceText = await loc.SourceTree!.GetTextAsync(ct);
                 var snippet = ExtractSnippet(sourceText, lineSpan.StartLinePosition.Line);
 
-                var root = await loc.SourceTree!.GetRootAsync(ct);
-                var token = root.FindToken(loc.SourceSpan.Start);
-                var containingMember = token.Parent?.AncestorsAndSelf()
-                    .OfType<MemberDeclarationSyntax>()
-                    .FirstOrDefault();
-
-                var memberName = containingMember switch
-                {
-                    MethodDeclarationSyntax m => m.Identifier.Text,
-                    PropertyDeclarationSyntax p => p.Identifier.Text,
-                    ConstructorDeclarationSyntax c => c.Identifier.Text,
-                    _ => null
-                };
-
                 results.Add(new DefinitionLocation(
                     File: filePath,
                     Line: line,
                     Column: col,
                     Snippet: snippet,
-                    ContainingMember: memberName,
+                    ContainingMember: targetSymbol is not INamedTypeSymbol ? targetSymbol.Name : null,
                     ContainingType: targetSymbol.ContainingType?.ToDisplayString() ?? (targetSymbol as INamedTypeSymbol)?.ToDisplayString(),
                     Kind: MapSymbolKind(targetSymbol),
                     IsMetadata: false,
@@ -714,11 +700,11 @@ public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder,
                             string.Equals(name, symbol.MemberSignature, StringComparison.OrdinalIgnoreCase),
                     cancellationToken: ct);
 
-                resolvedSymbol = declarations.FirstOrDefault(d =>
-                    string.IsNullOrWhiteSpace(symbol.ContainingType) ||
-                    string.Equals(d.ContainingType?.ToDisplayString(), symbol.ContainingType, StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(d.ContainingType?.Name, symbol.ContainingType, StringComparison.OrdinalIgnoreCase))
-                    ?? declarations.FirstOrDefault();
+                resolvedSymbol = string.IsNullOrWhiteSpace(symbol.ContainingType)
+                    ? declarations.FirstOrDefault()
+                    : declarations.FirstOrDefault(d =>
+                        string.Equals(d.ContainingType?.ToDisplayString(), symbol.ContainingType, StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(d.ContainingType?.Name, symbol.ContainingType, StringComparison.OrdinalIgnoreCase));
 
                 if (resolvedSymbol != null) break;
             }
@@ -738,7 +724,9 @@ public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder,
                     SymbolFilter.Type,
                     cancellationToken: ct);
 
-                resolvedSymbol = declarations.FirstOrDefault();
+                resolvedSymbol = declarations.FirstOrDefault(d =>
+                    string.Equals(d.ToDisplayString(), symbol.ContainingType, StringComparison.OrdinalIgnoreCase))
+                    ?? declarations.FirstOrDefault();
                 if (resolvedSymbol != null) break;
             }
         }

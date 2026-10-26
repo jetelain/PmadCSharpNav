@@ -30,7 +30,7 @@ public static class OutputFormatter
             sb.AppendLine(CultureInfo.InvariantCulture, $"{theme.Dim("-")} {theme.Bold("**Total References:**")} {res.TotalReferences}");
             sb.AppendLine();
             sb.AppendLine(CultureInfo.InvariantCulture, $"{theme.TableBorder("|")} {theme.TableHeader("Location")} {theme.TableBorder("|")} {theme.TableHeader("Kind")} {theme.TableBorder("|")} {theme.TableHeader("Containing Member")} {theme.TableBorder("|")} {theme.TableHeader("Snippet")} {theme.TableBorder("|")}");
-            sb.AppendLine(theme.TableBorder("| :--- | :--- | :--- | :--- |"));
+            sb.AppendLine(theme.TableBorder("| :--- | :--- | :--- | :--- | :--- |"));
             foreach (var r in res.References)
             {
                 var relFile = PathHelper.MakeRelative(r.File, baseDirectory) ?? r.File;
@@ -85,8 +85,8 @@ public static class OutputFormatter
             if (relTargetDef != null) sb.AppendLine(CultureInfo.InvariantCulture, $"{theme.Dim("-")} {theme.Bold("**Defined In:**")} `{theme.Location(relTargetDef)}:{res.Target.Line}`");
             sb.AppendLine(CultureInfo.InvariantCulture, $"{theme.Dim("-")} {theme.Bold("**Total Definitions:**")} {res.TotalDefinitions}");
             sb.AppendLine();
-            sb.AppendLine(CultureInfo.InvariantCulture, $"{theme.TableBorder("|")} {theme.TableHeader("Location")} {theme.TableBorder("|")} {theme.TableHeader("Kind")} {theme.TableBorder("|")} {theme.TableHeader("Containing Member")} {theme.TableBorder("|")} {theme.TableHeader("Snippet")} {theme.TableBorder("|")}");
-            sb.AppendLine(theme.TableBorder("| :--- | :--- | :--- | :--- |"));
+            sb.AppendLine(CultureInfo.InvariantCulture, $"{theme.TableBorder("|")} {theme.TableHeader("Location")} {theme.TableBorder("|")} {theme.TableHeader("Kind")} {theme.TableBorder("|")} {theme.TableHeader("Containing Type")} {theme.TableBorder("|")} {theme.TableHeader("Snippet")} {theme.TableBorder("|")}");
+            sb.AppendLine(theme.TableBorder("| :--- | :--- | :--- | :--- | :--- |"));
             foreach (var d in res.Definitions)
             {
                 string loc;
@@ -100,7 +100,7 @@ public static class OutputFormatter
                     loc = $"{relFile}:{d.Line}:{d.Column}";
                 }
                 var snip = d.Snippet?.Replace("|", "\\|", StringComparison.Ordinal).Replace("\r", "", StringComparison.Ordinal).Replace("\n", " ", StringComparison.Ordinal) ?? (d.SymbolId ?? "");
-                sb.AppendLine(CultureInfo.InvariantCulture, $"{theme.TableBorder("|")} `{theme.Location(loc)}` {theme.TableBorder("|")} {theme.Kind(d.Kind)} {theme.TableBorder("|")} {(d.ContainingMember != null ? theme.Member(d.ContainingMember) : "-")} {theme.TableBorder("|")} `{theme.Snippet(snip)}` {theme.TableBorder("|")}");
+                sb.AppendLine(CultureInfo.InvariantCulture, $"{theme.TableBorder("|")} `{theme.Location(loc)}` {theme.TableBorder("|")} {theme.Kind(d.Kind)} {theme.TableBorder("|")} {(d.ContainingType != null ? theme.Member(d.ContainingType) : "-")} {theme.TableBorder("|")} `{theme.Snippet(snip)}` {theme.TableBorder("|")}");
             }
         }
         else
@@ -121,8 +121,8 @@ public static class OutputFormatter
                 {
                     var relFile = PathHelper.MakeRelative(d.File, baseDirectory) ?? d.File;
                     var loc = $"{relFile}:{d.Line}:{d.Column}";
-                    var memberStr = d.ContainingMember != null ? $" in {theme.Member(d.ContainingMember)}" : "";
-                    sb.AppendLine(CultureInfo.InvariantCulture, $"  {theme.Location(loc)} [{theme.Kind(d.Kind)}]{memberStr}");
+                    var typeStr = d.ContainingType != null ? $" in {theme.Member(d.ContainingType)}" : "";
+                    sb.AppendLine(CultureInfo.InvariantCulture, $"  {theme.Location(loc)} [{theme.Kind(d.Kind)}]{typeStr}");
                     if (!string.IsNullOrWhiteSpace(d.Snippet))
                     {
                         sb.AppendLine(CultureInfo.InvariantCulture, $"    {theme.Snippet(d.Snippet.Trim())}");
@@ -157,7 +157,7 @@ public static class OutputFormatter
             sb.AppendLine(CultureInfo.InvariantCulture, $"{theme.Dim("-")} {theme.Bold("**Total Implementations:**")} {res.TotalImplementations}");
             sb.AppendLine();
             sb.AppendLine(CultureInfo.InvariantCulture, $"{theme.TableBorder("|")} {theme.TableHeader("Location")} {theme.TableBorder("|")} {theme.TableHeader("Kind")} {theme.TableBorder("|")} {theme.TableHeader("Containing Type")} {theme.TableBorder("|")} {theme.TableHeader("Snippet")} {theme.TableBorder("|")}");
-            sb.AppendLine(theme.TableBorder("| :--- | :--- | :--- | :--- |"));
+            sb.AppendLine(theme.TableBorder("| :--- | :--- | :--- | :--- | :--- |"));
             foreach (var i in res.Implementations)
             {
                 var relFile = PathHelper.MakeRelative(i.File, baseDirectory) ?? i.File;
