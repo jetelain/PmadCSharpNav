@@ -109,7 +109,7 @@ public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder,
                     }
 
                     var mapped = token.GetLocation().GetMappedLineSpan();
-                    if (!mapped.HasMappedPath || !string.Equals(RoslynWorkspaceSnapshot.NormalizePath(mapped.Path), normalizedPath, StringComparison.OrdinalIgnoreCase))
+                    if (!mapped.HasMappedPath || !RoslynWorkspaceSnapshot.PathMatches(mapped.Path, normalizedPath))
                     {
                         continue;
                     }

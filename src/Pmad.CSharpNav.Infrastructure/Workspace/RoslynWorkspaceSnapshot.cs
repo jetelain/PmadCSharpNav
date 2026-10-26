@@ -169,17 +169,34 @@ public sealed class RoslynWorkspaceSnapshot : IWorkspaceSnapshot
         {
             if (directive is LineSpanDirectiveTriviaSyntax spanDir &&
                 spanDir.File.ValueText is string path1 &&
-                string.Equals(NormalizePath(path1), normalizedMappedFilePath, StringComparison.OrdinalIgnoreCase))
+                PathMatches(path1, normalizedMappedFilePath))
             {
                 return true;
             }
 
             if (directive is LineDirectiveTriviaSyntax lineDir &&
                 lineDir.File.ValueText is string path2 &&
-                string.Equals(NormalizePath(path2), normalizedMappedFilePath, StringComparison.OrdinalIgnoreCase))
+                PathMatches(path2, normalizedMappedFilePath))
             {
                 return true;
             }
+        }
+
+        return false;
+    }
+
+    public static bool PathMatches(string candidatePath, string normalizedTargetPath)
+    {
+        var normCandidate = NormalizePath(candidatePath);
+        if (string.Equals(normCandidate, normalizedTargetPath, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (normalizedTargetPath.EndsWith("/" + normCandidate, StringComparison.OrdinalIgnoreCase) ||
+            normCandidate.EndsWith("/" + normalizedTargetPath, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
         }
 
         return false;
