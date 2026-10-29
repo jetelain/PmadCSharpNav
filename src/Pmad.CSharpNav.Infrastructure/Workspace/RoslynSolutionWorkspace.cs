@@ -119,23 +119,63 @@ public sealed class RoslynSolutionWorkspace : ISolutionWorkspace, IDisposable
             }
             else
             {
-                if (text == null)
+                var additionalDocIds = current.GetAdditionalDocumentIds(fullPath);
+                var ext = Path.GetExtension(fullPath).ToLowerInvariant();
+                var isRazorOrCshtml = ext is ".razor" or ".cshtml";
+
+                if (additionalDocIds.Count > 0)
                 {
-                    // Non-existent file deletion, no-op
-                    return current;
+                    foreach (var addId in additionalDocIds)
+                    {
+                        if (text == null)
+                        {
+                            newSolution = newSolution.RemoveAdditionalDocument(addId);
+                        }
+                        else
+                        {
+                            newSolution = newSolution.WithAdditionalDocumentText(addId, text);
+                        }
+                    }
                 }
-
-                // File added: find owning project by matching directory hierarchy
-                var targetProject = FindOwningProject(current.Solution, fullPath)
-                    ?? current.Solution.Projects.FirstOrDefault();
-
-                if (targetProject == null)
+                else if (isRazorOrCshtml)
                 {
-                    return current;
-                }
+                    if (text == null)
+                    {
+                        // Non-existent file deletion, no-op
+                        return current;
+                    }
 
-                var newDocId = DocumentId.CreateNewId(targetProject.Id);
-                newSolution = newSolution.AddDocument(newDocId, Path.GetFileName(fullPath), text, filePath: fullPath);
+                    var targetProject = FindOwningProject(current.Solution, fullPath)
+                        ?? current.Solution.Projects.FirstOrDefault();
+
+                    if (targetProject == null)
+                    {
+                        return current;
+                    }
+
+                    var newDocId = DocumentId.CreateNewId(targetProject.Id);
+                    newSolution = newSolution.AddAdditionalDocument(newDocId, Path.GetFileName(fullPath), text, filePath: fullPath);
+                }
+                else
+                {
+                    if (text == null)
+                    {
+                        // Non-existent file deletion, no-op
+                        return current;
+                    }
+
+                    // File added: find owning project by matching directory hierarchy
+                    var targetProject = FindOwningProject(current.Solution, fullPath)
+                        ?? current.Solution.Projects.FirstOrDefault();
+
+                    if (targetProject == null)
+                    {
+                        return current;
+                    }
+
+                    var newDocId = DocumentId.CreateNewId(targetProject.Id);
+                    newSolution = newSolution.AddDocument(newDocId, Path.GetFileName(fullPath), text, filePath: fullPath);
+                }
             }
 
             var newVersion = Interlocked.Increment(ref _snapshotVersion);

@@ -73,7 +73,7 @@ public sealed class DebouncedFileWatcher : IDisposable
             _pendingProjectReload = true;
             ScheduleFlush();
         }
-        else if (ext == ".cs")
+        else if (IsSourceFile(ext))
         {
             _pendingSourceChanges[fullPath] = 1;
             ScheduleFlush();
@@ -153,6 +153,15 @@ public sealed class DebouncedFileWatcher : IDisposable
         }
 
         return false;
+    }
+
+    public static bool IsSourceFile(string extension)
+    {
+        if (string.IsNullOrWhiteSpace(extension)) return false;
+        var ext = extension.StartsWith('.') ? extension : "." + extension;
+        return ext.Equals(".cs", StringComparison.OrdinalIgnoreCase) ||
+               ext.Equals(".razor", StringComparison.OrdinalIgnoreCase) ||
+               ext.Equals(".cshtml", StringComparison.OrdinalIgnoreCase);
     }
 
     public void Dispose()

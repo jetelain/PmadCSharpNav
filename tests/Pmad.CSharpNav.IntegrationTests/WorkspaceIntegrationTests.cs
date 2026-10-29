@@ -196,4 +196,40 @@ public sealed class WorkspaceIntegrationTests : IAsyncLifetime, IDisposable
         var snapshotAfter = await _workspace.GetCurrentSnapshotAsync();
         snapshotAfter.SnapshotVersion.Should().Be(syncResponse.SnapshotVersion);
     }
+
+    [Fact]
+    public async Task SyncDocument_WithRazorFile_AddsAndUpdatesAdditionalDocument()
+    {
+        var dummyRazor = Path.Combine(Path.GetDirectoryName(_solutionPath)!, "src", "Pmad.CSharpNav.Infrastructure", "TestComponent.razor");
+        var syncHandler = new SyncDocumentHandler(_workspace);
+
+        var syncResponse1 = await syncHandler.HandleAsync(new SyncRequest(
+            FilePath: dummyRazor,
+            Content: "<h1>Hello Razor</h1>"));
+
+        syncResponse1.SyncedFiles.Should().Contain(dummyRazor);
+
+        var snapshot1 = (RoslynWorkspaceSnapshot)await _workspace.GetCurrentSnapshotAsync();
+        var addDocId = snapshot1.FindAdditionalDocumentId(dummyRazor);
+        addDocId.Should().NotBeNull();
+
+        var syncResponse2 = await syncHandler.HandleAsync(new SyncRequest(
+            FilePath: dummyRazor,
+            Content: "<h1>Updated Razor</h1>"));
+
+        syncResponse2.SnapshotVersion.Should().BeGreaterThan(syncResponse1.SnapshotVersion);
+        var snapshot2 = (RoslynWorkspaceSnapshot)await _workspace.GetCurrentSnapshotAsync();
+        var doc = snapshot2.Solution.GetAdditionalDocument(addDocId!);
+        doc.Should().NotBeNull();
+        var text = await doc!.GetTextAsync();
+        text.ToString().Should().Be("<h1>Updated Razor</h1>");
+
+        // Sync with null removes the additional document
+        var syncResponse3 = await syncHandler.HandleAsync(new SyncRequest(
+            FilePath: dummyRazor,
+            Content: null));
+
+        var snapshot3 = (RoslynWorkspaceSnapshot)await _workspace.GetCurrentSnapshotAsync();
+        snapshot3.FindAdditionalDocumentId(dummyRazor).Should().BeNull();
+    }
 }
