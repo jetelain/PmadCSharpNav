@@ -157,7 +157,11 @@ public sealed class DebouncedFileWatcher : IDisposable
 
     public static bool IsSourceFile(string extension)
     {
-        return extension is ".cs" or ".razor" or ".cshtml";
+        if (string.IsNullOrWhiteSpace(extension)) return false;
+        var ext = extension.StartsWith('.') ? extension : "." + extension;
+        return ext.Equals(".cs", StringComparison.OrdinalIgnoreCase) ||
+               ext.Equals(".razor", StringComparison.OrdinalIgnoreCase) ||
+               ext.Equals(".cshtml", StringComparison.OrdinalIgnoreCase);
     }
 
     public void Dispose()

@@ -37,14 +37,22 @@ public class FileWatcherFilterTests
 
     [Theory]
     [InlineData(".cs", true)]
+    [InlineData(".CS", true)]
+    [InlineData("cs", true)]
     [InlineData(".razor", true)]
+    [InlineData(".Razor", true)]
+    [InlineData("razor", true)]
     [InlineData(".cshtml", true)]
+    [InlineData(".CSHTML", true)]
+    [InlineData("cshtml", true)]
     [InlineData(".csproj", false)]
     [InlineData(".json", false)]
     [InlineData(".md", false)]
     [InlineData(".dll", false)]
-    public void IsSourceFile_Identifies_SourceFiles(string ext, bool expectedResult)
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void IsSourceFile_Identifies_SourceFiles(string? ext, bool expectedResult)
     {
-        DebouncedFileWatcher.IsSourceFile(ext).Should().Be(expectedResult);
+        DebouncedFileWatcher.IsSourceFile(ext!).Should().Be(expectedResult);
     }
 }

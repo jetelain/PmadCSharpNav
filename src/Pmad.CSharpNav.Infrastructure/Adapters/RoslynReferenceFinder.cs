@@ -468,7 +468,7 @@ public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder,
             var text = loc.SourceTree != null ? await loc.SourceTree.GetTextAsync(ct) : null;
             if (text != null && line.Value - 1 < text.Lines.Count)
             {
-                snippet = text.Lines[line.Value - 1].ToString().Trim();
+                snippet = ExtractSnippet(text, line.Value - 1);
             }
         }
 

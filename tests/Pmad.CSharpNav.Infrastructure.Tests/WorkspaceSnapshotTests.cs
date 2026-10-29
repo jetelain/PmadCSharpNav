@@ -330,6 +330,17 @@ public class WorkspaceSnapshotTests
         foundIdWindows.Should().NotBeNull();
         foundIdUnix.Should().NotBeNull();
         foundIdWindows.Should().Be(additionalDocInfo.Id);
+        foundIdUnix.Should().Be(additionalDocInfo.Id);
+
+        // Relative path checks with both forward and backslashes
+        var foundIdRelative = snapshot.FindAdditionalDocumentId("Counter.razor");
+        foundIdRelative.Should().Be(additionalDocInfo.Id);
+
+        var foundIdRelativeWithFolder = snapshot.FindAdditionalDocumentId("Pages/Counter.razor");
+        foundIdRelativeWithFolder.Should().Be(additionalDocInfo.Id);
+
+        var foundIdRelativeWindows = snapshot.FindAdditionalDocumentId(@"Pages\Counter.razor");
+        foundIdRelativeWindows.Should().Be(additionalDocInfo.Id);
 
         var allIds = snapshot.GetAdditionalDocumentIds("C:/Repo/SampleWeb/Pages/Counter.razor");
         allIds.Should().ContainSingle().Which.Should().Be(additionalDocInfo.Id);
@@ -354,6 +365,19 @@ public class WorkspaceSnapshotTests
         var tree = CSharpSyntaxTree.ParseText(generatedSource);
         RoslynWorkspaceSnapshot.SyntaxTreeMapsToFile(tree, RoslynWorkspaceSnapshot.NormalizePath(razorPath)).Should().BeTrue();
         RoslynWorkspaceSnapshot.SyntaxTreeMapsToFile(tree, RoslynWorkspaceSnapshot.NormalizePath(Path.Combine(Path.GetTempPath(), "Unrelated.razor"))).Should().BeFalse();
+    }
+
+    [Fact]
+    public void RoslynWorkspaceSnapshot_SyntaxTreeMapsToFile_ReturnsFalse_WhenTreeContainsNoDirectives()
+    {
+        var sourceWithoutDirectives = """
+            public class StandardClass
+            {
+                public void DoWork() {}
+            }
+            """;
+        var tree = CSharpSyntaxTree.ParseText(sourceWithoutDirectives);
+        RoslynWorkspaceSnapshot.SyntaxTreeMapsToFile(tree, "Counter.razor").Should().BeFalse();
     }
 
     [Fact]
@@ -730,13 +754,22 @@ public class WorkspaceSnapshotTests
     [InlineData(@"\Pages\Counter.razor", "C:/Repo/Pages/Counter.razor", true)]
     [InlineData("Pages/Counter.razor", "C:/Repo/Pages/Counter.razor", true)]
     [InlineData("Counter.razor", "C:/Repo/Pages/Counter.razor", true)]
+    [InlineData("Counter.razor", @"C:\Repo\Pages\Counter.razor", true)]
+    [InlineData(@"Pages\Counter.razor", @"C:\Repo\Pages\Counter.razor", true)]
+    [InlineData("Pages/Counter.razor", @"C:\Repo\Pages\Counter.razor", true)]
+    [InlineData(@"\Pages\Counter.razor", @"C:\Repo\Pages\Counter.razor", true)]
+    [InlineData(@"C:\Repo\Pages\Counter.razor", "Pages/Counter.razor", true)]
+    [InlineData(@"C:\Repo\Pages\Counter.razor", @"Pages\Counter.razor", true)]
     [InlineData("Other.razor", "C:/Repo/Pages/Counter.razor", false)]
+    [InlineData("Other.razor", @"C:\Repo\Pages\Counter.razor", false)]
     [InlineData("", "C:/Repo/Pages/Counter.razor", false)]
     [InlineData("   ", "C:/Repo/Pages/Counter.razor", false)]
     [InlineData("Counter.razor", "", false)]
-    public void RoslynWorkspaceSnapshot_PathMatches_HandlesLeadingSlashesAndEdgeCases(string candidate, string target, bool expected)
+    [InlineData("Counter.razor", null, false)]
+    [InlineData(null, "C:/Repo/Pages/Counter.razor", false)]
+    public void RoslynWorkspaceSnapshot_PathMatches_HandlesLeadingSlashesAndEdgeCases(string? candidate, string? target, bool expected)
     {
-        RoslynWorkspaceSnapshot.PathMatches(candidate, RoslynWorkspaceSnapshot.NormalizePath(target)).Should().Be(expected);
+        RoslynWorkspaceSnapshot.PathMatches(candidate!, target!).Should().Be(expected);
     }
 
     [Fact]
@@ -830,6 +863,55 @@ public class WorkspaceSnapshotTests
         var razorRef = refs.FirstOrDefault(r => string.Equals(r.File, razorVirtualPath, StringComparison.OrdinalIgnoreCase));
         razorRef.Should().NotBeNull();
         razorRef!.Snippet.Should().Contain("In-memory synced buffer without disk file");
+    }
+
+    [Fact]
+    public async Task RoslynReferenceFinder_FindReferences_IncludeImplementations_ExtractsMultiLineSnippet_ForUnmappedSource()
+    {
+        using var workspace = new AdhocWorkspace();
+        var projInfo = ProjectInfo.Create(
+            ProjectId.CreateNewId(),
+            VersionStamp.Create(),
+            "SampleLib",
+            "SampleLib",
+            LanguageNames.CSharp,
+            metadataReferences: [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)]);
+
+        var ifaceDoc = DocumentInfo.Create(
+            DocumentId.CreateNewId(projInfo.Id),
+            "IService.cs",
+            loader: TextLoader.From(TextAndVersion.Create(
+                SourceText.From("public interface IService { void Execute(); }"),
+                VersionStamp.Create())));
+
+        var implDoc = DocumentInfo.Create(
+            DocumentId.CreateNewId(projInfo.Id),
+            "ServiceImpl.cs",
+            loader: TextLoader.From(TextAndVersion.Create(
+                SourceText.From("""
+                    public class ServiceImpl : IService
+                    {
+                        // Prefix line
+                        public void Execute() {}
+                        // Suffix line
+                    }
+                    """),
+                VersionStamp.Create())));
+
+        var solution = workspace.CurrentSolution
+            .AddProject(projInfo)
+            .AddDocument(ifaceDoc)
+            .AddDocument(implDoc);
+
+        var snapshot = new RoslynWorkspaceSnapshot(solution, @"C:\Repo\Solution.slnx", 1);
+        var finder = new RoslynReferenceFinder();
+        var target = new SymbolIdentifier("SampleLib", null, "IService", null, null);
+        var refs = await finder.FindReferencesAsync(snapshot, target, new ReferenceSearchOptions(IncludeImplementations: true));
+
+        refs.Should().NotBeEmpty();
+        var implRef = refs.FirstOrDefault(r => r.Kind == ReferenceKind.Implementation);
+        implRef.Should().NotBeNull();
+        implRef!.Snippet.Should().Contain("ServiceImpl : IService");
     }
 }
 

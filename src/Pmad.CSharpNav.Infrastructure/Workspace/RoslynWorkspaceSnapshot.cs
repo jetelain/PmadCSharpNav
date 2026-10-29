@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Pmad.CSharpNav.Application.Ports;
 
@@ -195,6 +196,11 @@ public sealed class RoslynWorkspaceSnapshot : IWorkspaceSnapshot
 
     private static bool SyntaxTreeMapsToFileInternal(SyntaxNode root, string normalizedMappedFilePath)
     {
+        if (!root.ContainsDirectives)
+        {
+            return false;
+        }
+
         foreach (var directive in root.DescendantNodes(descendIntoTrivia: true).OfType<DirectiveTriviaSyntax>())
         {
             if (directive is LineSpanDirectiveTriviaSyntax spanDir &&
@@ -215,23 +221,24 @@ public sealed class RoslynWorkspaceSnapshot : IWorkspaceSnapshot
         return false;
     }
 
-    public static bool PathMatches(string candidatePath, string normalizedTargetPath)
+    public static bool PathMatches(string candidatePath, string targetPath)
     {
-        if (string.IsNullOrWhiteSpace(candidatePath) || string.IsNullOrWhiteSpace(normalizedTargetPath))
+        if (string.IsNullOrWhiteSpace(candidatePath) || string.IsNullOrWhiteSpace(targetPath))
         {
             return false;
         }
 
         var normCandidate = NormalizePath(candidatePath);
-        if (string.Equals(normCandidate, normalizedTargetPath, StringComparison.OrdinalIgnoreCase))
+        var normTarget = NormalizePath(targetPath);
+        if (string.Equals(normCandidate, normTarget, StringComparison.OrdinalIgnoreCase))
         {
             return true;
         }
 
         var trimmedCandidate = normCandidate.TrimStart('/');
-        var trimmedTarget = normalizedTargetPath.TrimStart('/');
+        var trimmedTarget = normTarget.TrimStart('/');
 
-        if (normalizedTargetPath.EndsWith("/" + trimmedCandidate, StringComparison.OrdinalIgnoreCase) ||
+        if (normTarget.EndsWith("/" + trimmedCandidate, StringComparison.OrdinalIgnoreCase) ||
             normCandidate.EndsWith("/" + trimmedTarget, StringComparison.OrdinalIgnoreCase))
         {
             return true;
