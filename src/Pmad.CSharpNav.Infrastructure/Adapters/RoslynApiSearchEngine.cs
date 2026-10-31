@@ -39,7 +39,7 @@ public sealed class RoslynApiSearchEngine : IApiSearchEngine
     {
         var roslynSnapshot = (RoslynWorkspaceSnapshot)snapshot;
         var solutionDir = !string.IsNullOrEmpty(roslynSnapshot.SolutionPath)
-            ? (Path.GetDirectoryName(roslynSnapshot.SolutionPath) ?? "")
+            ? PathNormalizer.GetDirectoryName(roslynSnapshot.SolutionPath)
             : "";
         var results = new List<ApiDefinition>();
 
