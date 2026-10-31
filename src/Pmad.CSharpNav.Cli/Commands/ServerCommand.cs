@@ -15,7 +15,7 @@ public static class ServerCommand
         statusCmd.SetAction(async (parseResult, ct) =>
         {
             var specifiedSolution = parseResult.GetValue(globals.SolutionOption);
-            var format = parseResult.GetValue(globals.FormatOption) ?? "markdown";
+            var format = parseResult.GetValue(globals.FormatOption) ?? GlobalOptions.GetDefaultFormat();
 
             try
             {

@@ -1435,5 +1435,179 @@ public class WorkspaceSnapshotTests
             }
         }
     }
+
+    [Fact]
+    public async Task RoslynApiSearchEngine_SearchAsync_Handles_GenericTypeArgs_WildcardParamExclusion_And_RegexPatterns()
+    {
+        using var workspace = new AdhocWorkspace();
+        var coreLibRef = MetadataReference.CreateFromFile(typeof(object).Assembly.Location);
+
+        var proj = ProjectInfo.Create(
+            ProjectId.CreateNewId(),
+            VersionStamp.Create(),
+            "GenericTypeMatchProject",
+            "GenericTypeMatchProject",
+            LanguageNames.CSharp,
+            filePath: @"C:\Repo\src\GenericTypeMatchProject\GenericTypeMatchProject.csproj",
+            metadataReferences: [coreLibRef]);
+
+        var code = """
+            using System;
+            using System.Collections.Generic;
+            using System.Threading.Tasks;
+
+            namespace MyDomain.Catalog
+            {
+                public class OrderItem {}
+                public class CustomerItem {}
+
+                public interface IStore<T> {}
+
+                public class OrderStore : IStore<OrderItem>
+                {
+                    public Task<OrderItem> GetOrderAsync() => Task.FromResult(new OrderItem());
+                    public Task<IReadOnlyList<OrderItem>> ListOrdersAsync() => Task.FromResult<IReadOnlyList<OrderItem>>(Array.Empty<OrderItem>());
+                    public OrderItem[] GetOrderArray() => Array.Empty<OrderItem>();
+                    public void AuditCustomer(CustomerItem customer) {}
+                }
+
+                public class CustomerStore : IStore<CustomerItem>
+                {
+                    public Task<CustomerItem> GetCustomerAsync() => Task.FromResult(new CustomerItem());
+                }
+
+                public class GenericBox<T>
+                {
+                }
+            }
+            """;
+
+        var doc = DocumentInfo.Create(
+            DocumentId.CreateNewId(proj.Id),
+            "Catalog.cs",
+            filePath: @"C:\Repo\src\GenericTypeMatchProject\Catalog.cs",
+            loader: TextLoader.From(TextAndVersion.Create(
+                SourceText.From(code),
+                VersionStamp.Create())));
+
+        var solution = workspace.CurrentSolution
+            .AddProject(proj)
+            .AddDocument(doc);
+
+        var snapshot = new RoslynWorkspaceSnapshot(solution, @"C:\Repo\Solution.sln", 1);
+        var engine = new RoslynApiSearchEngine();
+
+        // 1. InheritsFrom with specific generic argument IStore<OrderItem> only matches OrderStore, NOT CustomerStore
+        var orderStores = await engine.SearchAsync(snapshot, new ApiSearchCriteria(
+            InheritsFrom: "IStore<OrderItem>",
+            Scope: "source"));
+        orderStores.Should().ContainSingle(m => m.Name.Contains("OrderStore"));
+        orderStores.Should().NotContain(m => m.Name.Contains("CustomerStore"));
+
+        // 2. ReturnsType with specific generic argument Task<OrderItem> only matches GetOrderAsync, NOT GetCustomerAsync
+        var taskOrderMethods = await engine.SearchAsync(snapshot, new ApiSearchCriteria(
+            ReturnsType: "Task<OrderItem>",
+            Scope: "source"));
+        taskOrderMethods.Should().ContainSingle(m => m.Name.Contains("GetOrderAsync"));
+        taskOrderMethods.Should().NotContain(m => m.Name.Contains("GetCustomerAsync"));
+
+        // 3. ReturnsType "OrderItem" matches direct, nested generic Task<IReadOnlyList<OrderItem>>, and array OrderItem[]
+        var allOrderReturnMethods = await engine.SearchAsync(snapshot, new ApiSearchCriteria(
+            ReturnsType: "OrderItem",
+            Scope: "source"));
+        allOrderReturnMethods.Should().Contain(m => m.Name.Contains("GetOrderAsync"));
+        allOrderReturnMethods.Should().Contain(m => m.Name.Contains("ListOrdersAsync"));
+        allOrderReturnMethods.Should().Contain(m => m.Name.Contains("GetOrderArray"));
+        allOrderReturnMethods.Should().NotContain(m => m.Name.Contains("GetCustomerAsync"));
+
+        // 4. Wildcard pattern "*CustomerItem*" does NOT falsely match AuditCustomer(CustomerItem) via parameter type
+        var wildcardCustomer = await engine.SearchAsync(snapshot, new ApiSearchCriteria(
+            Pattern: "*CustomerItem*",
+            Scope: "source"));
+        wildcardCustomer.Should().ContainSingle(m => m.Name == "MyDomain.Catalog.CustomerItem");
+        wildcardCustomer.Should().NotContain(m => m.Name.Contains("AuditCustomer"));
+
+        // 5. Pattern with generic parameter "GenericBox<T>" matches GenericBox<T> at Tier 1
+        var genericBoxMatch = await engine.SearchAsync(snapshot, new ApiSearchCriteria(
+            Pattern: "GenericBox<T>",
+            Scope: "source"));
+        genericBoxMatch.Should().ContainSingle(m => m.Name.Contains("GenericBox"));
+
+        // 6. Regex pattern "^Order.*Store$" matches OrderStore
+        var regexMatches = await engine.SearchAsync(snapshot, new ApiSearchCriteria(
+            Pattern: "^Order.*Store$",
+            Scope: "source"));
+        regexMatches.Should().ContainSingle(m => m.Name.Contains("OrderStore"));
+    }
+
+    [Fact]
+    public async Task RoslynReferenceFinder_FindDefinitions_MappedFileWithUnmappedEnd_DoesNotReturnGeneratedEndLine()
+    {
+        using var workspace = new AdhocWorkspace();
+        var coreLibRef = MetadataReference.CreateFromFile(typeof(object).Assembly.Location);
+
+        var proj = ProjectInfo.Create(
+            ProjectId.CreateNewId(),
+            VersionStamp.Create(),
+            "RazorDefProject",
+            "RazorDefProject",
+            LanguageNames.CSharp,
+            filePath: @"C:\Repo\src\RazorDefProject\RazorDefProject.csproj",
+            metadataReferences: [coreLibRef]);
+
+        var generatedCode = """
+            namespace RazorDefNamespace
+            {
+            #line 3 "C:\\Repo\\src\\RazorDefProject\\Counter.razor"
+                public class Counter
+                {
+                    public void Increment()
+                    {
+                    }
+            #line default
+            #line hidden
+                    // Many lines of generated scaffold
+                    private int _hidden1;
+                    private int _hidden2;
+                    private int _hidden3;
+                    private int _hidden4;
+                }
+            }
+            """;
+
+        var doc = DocumentInfo.Create(
+            DocumentId.CreateNewId(proj.Id),
+            "Counter.razor.g.cs",
+            filePath: @"C:\Repo\src\RazorDefProject\obj\Counter.razor.g.cs",
+            loader: TextLoader.From(TextAndVersion.Create(
+                SourceText.From(generatedCode),
+                VersionStamp.Create())));
+
+        var solution = workspace.CurrentSolution
+            .AddProject(proj)
+            .AddDocument(doc);
+
+        var snapshot = new RoslynWorkspaceSnapshot(solution, @"C:\Repo\Solution.sln", 1);
+        var finder = new RoslynReferenceFinder();
+
+        // Increment() has both start and end inside #line 3 "Counter.razor" (lines 5 to 7 in Counter.razor)
+        var methodDefs = await finder.FindDefinitionsAsync(
+            snapshot,
+            new SymbolIdentifier("RazorDefProject", "RazorDefNamespace", "Counter", "void Increment()", null),
+            new DefinitionSearchOptions());
+        methodDefs.Should().ContainSingle();
+        methodDefs[0].Line.Should().Be(5);
+        methodDefs[0].EndLine.Should().Be(7);
+
+        // Counter class starts inside #line 3 "Counter.razor" (line 3), but its closing brace is after #line default (line 16 of .g.cs).
+        // EndLine should not leak the unmapped .g.cs line 16.
+        var classDefs = await finder.FindDefinitionsAsync(
+            snapshot,
+            new SymbolIdentifier("RazorDefProject", "RazorDefNamespace", "RazorDefNamespace.Counter", null, "T:RazorDefNamespace.Counter"),
+            new DefinitionSearchOptions());
+        classDefs.Should().ContainSingle();
+        classDefs[0].Line.Should().Be(3);
+        classDefs[0].EndLine.Should().Be(3);
+    }
 }
 

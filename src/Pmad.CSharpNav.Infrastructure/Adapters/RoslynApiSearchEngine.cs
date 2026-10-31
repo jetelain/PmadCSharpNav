@@ -62,27 +62,29 @@ public sealed class RoslynApiSearchEngine : IApiSearchEngine
         {
             foreach (var p in criteria.Patterns)
             {
-                if (!string.IsNullOrWhiteSpace(p) && !activePatterns.Contains(p, StringComparer.OrdinalIgnoreCase))
+                var trimmed = p?.Trim();
+                if (!string.IsNullOrWhiteSpace(trimmed) && !activePatterns.Contains(trimmed, StringComparer.OrdinalIgnoreCase))
                 {
-                    activePatterns.Add(p);
+                    activePatterns.Add(trimmed);
                 }
             }
         }
-        if (!string.IsNullOrWhiteSpace(criteria.Pattern) && !activePatterns.Contains(criteria.Pattern, StringComparer.OrdinalIgnoreCase))
+        if (!string.IsNullOrWhiteSpace(criteria.Pattern))
         {
-            activePatterns.Add(criteria.Pattern);
+            var trimmed = criteria.Pattern.Trim();
+            if (!activePatterns.Contains(trimmed, StringComparer.OrdinalIgnoreCase))
+            {
+                activePatterns.Add(trimmed);
+            }
         }
 
         var patternRegexes = new Dictionary<string, Regex>(StringComparer.OrdinalIgnoreCase);
         foreach (var p in activePatterns)
         {
-            if (p.Contains('*') || p.Contains('?'))
+            var regex = TryBuildPatternRegex(p);
+            if (regex != null)
             {
-                var body = Regex.Escape(p).Replace("\\*", ".*").Replace("\\?", ".");
-                var regexPattern = p.Contains('.')
-                    ? "(?:^|\\.)" + body + "$"
-                    : "^" + body + "$";
-                patternRegexes[p] = new Regex(regexPattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+                patternRegexes[p] = regex;
             }
         }
 
@@ -245,7 +247,7 @@ public sealed class RoslynApiSearchEngine : IApiSearchEngine
             var mvid = asmSymbol.Identity.ToString();
             var hashBytes = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(mvid));
             var hash = Convert.ToHexString(hashBytes)[..16].ToLowerInvariant();
-            var cacheFile = Path.Combine(_cacheDirectory, $"{SanitizeFileName(asmName)}_v3_{hash}.json");
+            var cacheFile = Path.Combine(_cacheDirectory, $"{SanitizeFileName(asmName)}_v4_{hash}.json");
 
             if (_assemblyCache.TryGetValue(asmName, out var cached))
             {
@@ -346,6 +348,40 @@ public sealed class RoslynApiSearchEngine : IApiSearchEngine
         }
     }
 
+    private static bool IsRegexSyntax(string pattern) =>
+        pattern.StartsWith('^') ||
+        pattern.EndsWith('$') ||
+        pattern.Contains('|') ||
+        pattern.Contains('+') ||
+        pattern.Contains('\\') ||
+        (pattern.Contains('[') && !pattern.Contains("this[", StringComparison.OrdinalIgnoreCase));
+
+    private static Regex? TryBuildPatternRegex(string p)
+    {
+        if (IsRegexSyntax(p))
+        {
+            try
+            {
+                return new Regex(p, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            }
+            catch (ArgumentException)
+            {
+                return null;
+            }
+        }
+
+        if (p.Contains('*') || p.Contains('?'))
+        {
+            var body = Regex.Escape(p).Replace("\\*", ".*").Replace("\\?", ".");
+            var regexPattern = p.Contains('.')
+                ? "(?:^|\\.)" + body + "$"
+                : "^" + body + "$";
+            return new Regex(regexPattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        }
+
+        return null;
+    }
+
     private static bool MatchesAnyPatternName(string name, List<string> activePatterns, Dictionary<string, Regex> regexes)
     {
         if (activePatterns.Count == 0) return true;
@@ -369,29 +405,75 @@ public sealed class RoslynApiSearchEngine : IApiSearchEngine
             ? symbol.ContainingType.Name
             : symbol.Name;
         var fullName = symbol.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat);
+        var fullNameWithoutParams = StripParameters(fullName);
         var cleanFullName = CleanSignatureOrName(fullName);
 
         for (int i = 0; i < activePatterns.Count; i++)
         {
             var p = activePatterns[i];
             regexes.TryGetValue(p, out var reg);
-            if (reg != null)
+            if (MatchesSinglePattern(simpleName, cleanFullName, fullNameWithoutParams, fullName, p, reg))
             {
-                if (reg.IsMatch(simpleName) || reg.IsMatch(cleanFullName) || reg.IsMatch(fullName))
-                    return true;
-            }
-            else
-            {
-                if (string.Equals(simpleName, p, StringComparison.OrdinalIgnoreCase) ||
-                    simpleName.Contains(p, StringComparison.OrdinalIgnoreCase) ||
-                    IsQualifiedSuffixMatch(cleanFullName, p) ||
-                    MatchesPascalCaseWord(simpleName, p) ||
-                    cleanFullName.Contains(p, StringComparison.OrdinalIgnoreCase))
-                {
-                    return true;
-                }
+                return true;
             }
         }
+        return false;
+    }
+
+    private static bool MatchesSinglePattern(
+        string simpleName,
+        string cleanFullName,
+        string fullNameWithoutParams,
+        string fullName,
+        string pattern,
+        Regex? reg)
+    {
+        if (reg != null)
+        {
+            if (reg.IsMatch(simpleName) || reg.IsMatch(cleanFullName) || reg.IsMatch(fullNameWithoutParams))
+            {
+                return true;
+            }
+            if (pattern.Contains('(') && reg.IsMatch(fullName))
+            {
+                return true;
+            }
+            return false;
+        }
+
+        var cleanPattern = CleanSignatureOrName(pattern);
+        if (string.IsNullOrEmpty(cleanPattern))
+        {
+            cleanPattern = pattern;
+        }
+
+        if (pattern.Contains('.'))
+        {
+            if (IsQualifiedSuffixMatch(cleanFullName, pattern) ||
+                cleanFullName.Contains(cleanPattern, StringComparison.OrdinalIgnoreCase) ||
+                fullNameWithoutParams.Contains(pattern, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+            if (pattern.Contains('(') && fullName.Contains(pattern, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+            return false;
+        }
+
+        if (string.Equals(simpleName, cleanPattern, StringComparison.OrdinalIgnoreCase) ||
+            simpleName.Contains(cleanPattern, StringComparison.OrdinalIgnoreCase) ||
+            MatchesPascalCaseWord(simpleName, cleanPattern))
+        {
+            return true;
+        }
+
+        if (pattern.Contains('(') && fullName.Contains(pattern, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
         return false;
     }
 
@@ -402,13 +484,23 @@ public sealed class RoslynApiSearchEngine : IApiSearchEngine
         if (regex != null)
         {
             if (regex.IsMatch(name)) return true;
+            if (IsRegexSyntax(pattern) && (pattern.Contains("\\.") || pattern.Contains('.')))
+            {
+                return true;
+            }
         }
 
-        if (string.Equals(name, pattern, StringComparison.OrdinalIgnoreCase)) return true;
-
-        if (pattern.Contains('.'))
+        var cleanPattern = CleanSignatureOrName(pattern);
+        if (string.IsNullOrEmpty(cleanPattern))
         {
-            var simple = pattern[(pattern.LastIndexOf('.') + 1)..];
+            cleanPattern = pattern;
+        }
+
+        if (string.Equals(name, cleanPattern, StringComparison.OrdinalIgnoreCase)) return true;
+
+        if (cleanPattern.Contains('.'))
+        {
+            var simple = cleanPattern[(cleanPattern.LastIndexOf('.') + 1)..];
             if (string.IsNullOrWhiteSpace(simple) || simple == "*") return true;
             if (simple.Contains('*') || simple.Contains('?'))
             {
@@ -422,9 +514,10 @@ public sealed class RoslynApiSearchEngine : IApiSearchEngine
             {
                 return true;
             }
+            return false;
         }
 
-        return name.Contains(pattern, StringComparison.OrdinalIgnoreCase);
+        return name.Contains(cleanPattern, StringComparison.OrdinalIgnoreCase);
     }
 
     private static string ExtractSimpleName(string name)
@@ -438,7 +531,7 @@ public sealed class RoslynApiSearchEngine : IApiSearchEngine
         return clean.Trim();
     }
 
-    private static string CleanSignatureOrName(string name)
+    private static string StripParameters(string name)
     {
         var clean = name;
         var parenIndex = clean.IndexOf('(');
@@ -446,6 +539,17 @@ public sealed class RoslynApiSearchEngine : IApiSearchEngine
         {
             clean = clean[..parenIndex];
         }
+        var bracketIndex = clean.IndexOf('[');
+        if (bracketIndex >= 0)
+        {
+            clean = clean[..bracketIndex];
+        }
+        return clean.Trim();
+    }
+
+    private static string CleanSignatureOrName(string name)
+    {
+        var clean = StripParameters(name);
         if (clean.Contains('<'))
         {
             clean = StripGenericArguments(clean);
@@ -476,8 +580,47 @@ public sealed class RoslynApiSearchEngine : IApiSearchEngine
         return sb.ToString();
     }
 
+    private static List<string> SplitTopLevelTypeArguments(string inner)
+    {
+        var result = new List<string>();
+        int depth = 0;
+        int start = 0;
+        for (int i = 0; i < inner.Length; i++)
+        {
+            char c = inner[i];
+            if (c == '<')
+            {
+                depth++;
+            }
+            else if (c == '>')
+            {
+                if (depth > 0) depth--;
+            }
+            else if (c == ',' && depth == 0)
+            {
+                var segment = inner[start..i].Trim();
+                if (segment.Length > 0)
+                {
+                    result.Add(segment);
+                }
+                start = i + 1;
+            }
+        }
+        var last = inner[start..].Trim();
+        if (last.Length > 0)
+        {
+            result.Add(last);
+        }
+        return result;
+    }
+
     private static string? ExtractNamespace(ApiDefinition api)
     {
+        if (!string.IsNullOrWhiteSpace(api.Namespace))
+        {
+            return api.Namespace;
+        }
+
         var target = !string.IsNullOrWhiteSpace(api.ContainingType)
             ? api.ContainingType
             : api.Name;
@@ -490,6 +633,7 @@ public sealed class RoslynApiSearchEngine : IApiSearchEngine
     private static bool IsQualifiedSuffixMatch(string cleanFullName, string pattern)
     {
         var cleanPattern = CleanSignatureOrName(pattern);
+        if (string.IsNullOrEmpty(cleanPattern)) return false;
         if (string.Equals(cleanFullName, cleanPattern, StringComparison.OrdinalIgnoreCase))
             return true;
         if (cleanFullName.EndsWith("." + cleanPattern, StringComparison.OrdinalIgnoreCase))
@@ -525,7 +669,8 @@ public sealed class RoslynApiSearchEngine : IApiSearchEngine
             or DomainSymbolKind.Interface
             or DomainSymbolKind.Record
             or DomainSymbolKind.Struct
-            or DomainSymbolKind.Enum;
+            or DomainSymbolKind.Enum
+            or DomainSymbolKind.Delegate;
 
     private static bool IsMember(DomainSymbolKind kind) =>
         kind is DomainSymbolKind.Method
@@ -541,28 +686,38 @@ public sealed class RoslynApiSearchEngine : IApiSearchEngine
         var shortName = ExtractSimpleName(api.Name);
         var cleanFullName = CleanSignatureOrName(api.Name);
         bool isType = IsType(api.Kind);
-        bool isMember = !isType;
+        bool isMember = IsMember(api.Kind);
 
         // Tier 1 (Exact Type Name): Type symbol (class, interface, record, struct, enum) whose short name equals a pattern (case-insensitive).
-        if (isType && patterns.Any(p => string.Equals(shortName, p, StringComparison.OrdinalIgnoreCase)))
+        if (isType && patterns.Any(p =>
+            string.Equals(shortName, p, StringComparison.OrdinalIgnoreCase) ||
+            (!p.Contains('.') && !p.Contains('*') && !p.Contains('?') && string.Equals(shortName, CleanSignatureOrName(p), StringComparison.OrdinalIgnoreCase))))
         {
             return 1;
         }
 
         // Tier 2 (Exact Member Name): Member symbol (method, property, field, event, constructor) whose short name equals a pattern (case-insensitive).
-        if (isMember && patterns.Any(p => string.Equals(shortName, p, StringComparison.OrdinalIgnoreCase)))
+        if (isMember && patterns.Any(p =>
+            string.Equals(shortName, p, StringComparison.OrdinalIgnoreCase) ||
+            (!p.Contains('.') && !p.Contains('*') && !p.Contains('?') && string.Equals(shortName, CleanSignatureOrName(p), StringComparison.OrdinalIgnoreCase))))
         {
             return 2;
         }
 
         // Tier 3 (Qualified Suffix Match): Type.Member or Namespace.Type suffix match.
-        if (patterns.Any(p => IsQualifiedSuffixMatch(cleanFullName, p)))
+        if (patterns.Any(p => p.Contains('.') && !p.Contains('*') && !p.Contains('?') && IsQualifiedSuffixMatch(cleanFullName, p)))
         {
             return 3;
         }
 
         // Tier 4 (Prefix / PascalCase Word Match): Symbol name starts with the pattern or matches a PascalCase word boundary.
-        if (patterns.Any(p => shortName.StartsWith(p, StringComparison.OrdinalIgnoreCase) || MatchesPascalCaseWord(shortName, p)))
+        if (patterns.Any(p =>
+        {
+            if (p.Contains('.') || p.Contains('*') || p.Contains('?') || IsRegexSyntax(p)) return false;
+            var cleanP = CleanSignatureOrName(p);
+            if (string.IsNullOrEmpty(cleanP)) return false;
+            return shortName.StartsWith(cleanP, StringComparison.OrdinalIgnoreCase) || MatchesPascalCaseWord(shortName, cleanP);
+        }))
         {
             return 4;
         }
@@ -606,7 +761,7 @@ public sealed class RoslynApiSearchEngine : IApiSearchEngine
 
         if (kindCriteria.Equals("type", StringComparison.OrdinalIgnoreCase))
         {
-            return IsType(kind) || kind == DomainSymbolKind.Delegate;
+            return IsType(kind);
         }
 
         var kindStr = kind.ToString();
@@ -615,7 +770,7 @@ public sealed class RoslynApiSearchEngine : IApiSearchEngine
             return kindCriteria
                 .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .Any(k => k.Equals("type", StringComparison.OrdinalIgnoreCase)
-                    ? (IsType(kind) || kind == DomainSymbolKind.Delegate)
+                    ? IsType(kind)
                     : kindStr.Equals(k, StringComparison.OrdinalIgnoreCase));
         }
 
@@ -638,21 +793,27 @@ public sealed class RoslynApiSearchEngine : IApiSearchEngine
         var cleanTarget = targetType.Trim().TrimEnd('?');
         if (string.IsNullOrEmpty(cleanTarget)) return false;
 
-        var strippedTarget = StripGenericArguments(cleanTarget);
         var minDisplay = typeSymbol.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat).TrimEnd('?');
         var fullDisplay = typeSymbol.ToDisplayString().TrimEnd('?');
 
         if (typeSymbol.Name.Equals(cleanTarget, StringComparison.OrdinalIgnoreCase) ||
-            typeSymbol.Name.Equals(strippedTarget, StringComparison.OrdinalIgnoreCase) ||
             minDisplay.Equals(cleanTarget, StringComparison.OrdinalIgnoreCase) ||
-            StripGenericArguments(minDisplay).Equals(strippedTarget, StringComparison.OrdinalIgnoreCase) ||
-            fullDisplay.Equals(cleanTarget, StringComparison.OrdinalIgnoreCase) ||
-            StripGenericArguments(fullDisplay).Equals(strippedTarget, StringComparison.OrdinalIgnoreCase))
+            fullDisplay.Equals(cleanTarget, StringComparison.OrdinalIgnoreCase))
         {
             return true;
         }
 
-        return false;
+        if (!cleanTarget.Contains('<'))
+        {
+            if (StripGenericArguments(minDisplay).Equals(cleanTarget, StringComparison.OrdinalIgnoreCase) ||
+                StripGenericArguments(fullDisplay).Equals(cleanTarget, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+            return false;
+        }
+
+        return MatchesTypeNameString(fullDisplay, cleanTarget) || MatchesTypeNameString(minDisplay, cleanTarget);
     }
 
     private static bool MatchesReturnType(ITypeSymbol returnType, string targetReturnType)
@@ -662,11 +823,16 @@ public sealed class RoslynApiSearchEngine : IApiSearchEngine
             return true;
         }
 
-        if (returnType is INamedTypeSymbol { IsGenericType: true } namedType)
+        if (returnType is IArrayTypeSymbol arrayType && !targetReturnType.Trim().EndsWith("[]", StringComparison.Ordinal))
+        {
+            return MatchesReturnType(arrayType.ElementType, targetReturnType);
+        }
+
+        if (returnType is INamedTypeSymbol { IsGenericType: true } namedType && !targetReturnType.Contains('<'))
         {
             foreach (var typeArg in namedType.TypeArguments)
             {
-                if (MatchesTypeName(typeArg, targetReturnType))
+                if (MatchesReturnType(typeArg, targetReturnType))
                 {
                     return true;
                 }
@@ -685,19 +851,64 @@ public sealed class RoslynApiSearchEngine : IApiSearchEngine
         if (cleanCandidate.Equals(cleanTarget, StringComparison.OrdinalIgnoreCase)) return true;
 
         var strippedCandidate = StripGenericArguments(cleanCandidate);
-        var strippedTarget = StripGenericArguments(cleanTarget);
-        if (strippedCandidate.Equals(strippedTarget, StringComparison.OrdinalIgnoreCase)) return true;
-
         var shortCandidate = ExtractSimpleName(strippedCandidate);
-        if (shortCandidate.Equals(strippedTarget, StringComparison.OrdinalIgnoreCase)) return true;
+
+        if (cleanTarget.Contains('<'))
+        {
+            var candOpen = cleanCandidate.IndexOf('<');
+            var candClose = cleanCandidate.LastIndexOf('>');
+            var targOpen = cleanTarget.IndexOf('<');
+            var targClose = cleanTarget.LastIndexOf('>');
+            if (candOpen < 0 || candClose <= candOpen || targOpen < 0 || targClose <= targOpen)
+            {
+                return false;
+            }
+
+            var strippedTarget = StripGenericArguments(cleanTarget);
+            var shortTarget = ExtractSimpleName(strippedTarget);
+            bool outerMatches = strippedCandidate.Equals(strippedTarget, StringComparison.OrdinalIgnoreCase) ||
+                                (!strippedTarget.Contains('.') && shortCandidate.Equals(shortTarget, StringComparison.OrdinalIgnoreCase));
+            if (!outerMatches)
+            {
+                return false;
+            }
+
+            var candArgs = SplitTopLevelTypeArguments(cleanCandidate[(candOpen + 1)..candClose]);
+            var targArgs = SplitTopLevelTypeArguments(cleanTarget[(targOpen + 1)..targClose]);
+            if (candArgs.Count != targArgs.Count)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < candArgs.Count; i++)
+            {
+                if (!MatchesTypeNameString(candArgs[i], targArgs[i]))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        if (strippedCandidate.Equals(cleanTarget, StringComparison.OrdinalIgnoreCase)) return true;
+        if (!cleanTarget.Contains('.') && shortCandidate.Equals(cleanTarget, StringComparison.OrdinalIgnoreCase)) return true;
+
+        if (cleanCandidate.EndsWith("[]", StringComparison.Ordinal) && !cleanTarget.EndsWith("[]", StringComparison.Ordinal))
+        {
+            if (MatchesTypeNameString(cleanCandidate[..^2], cleanTarget))
+            {
+                return true;
+            }
+        }
 
         // Also check generic type argument e.g. Task<Order> matching Order
         var openAngle = cleanCandidate.IndexOf('<');
         var closeAngle = cleanCandidate.LastIndexOf('>');
-        if (openAngle >= 0 && closeAngle > openAngle && !cleanTarget.Contains('<'))
+        if (openAngle >= 0 && closeAngle > openAngle)
         {
             var inner = cleanCandidate[(openAngle + 1)..closeAngle];
-            foreach (var part in inner.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            foreach (var part in SplitTopLevelTypeArguments(inner))
             {
                 if (MatchesTypeNameString(part, cleanTarget))
                 {
@@ -806,6 +1017,7 @@ public sealed class RoslynApiSearchEngine : IApiSearchEngine
         if (activePatterns.Count > 0)
         {
             var simpleName = ExtractSimpleName(api.Name);
+            var fullNameWithoutParams = StripParameters(api.Name);
             var cleanFullName = CleanSignatureOrName(api.Name);
             bool anyMatched = false;
 
@@ -813,25 +1025,10 @@ public sealed class RoslynApiSearchEngine : IApiSearchEngine
             {
                 var p = activePatterns[i];
                 regexes.TryGetValue(p, out var reg);
-                if (reg != null)
+                if (MatchesSinglePattern(simpleName, cleanFullName, fullNameWithoutParams, api.Name, p, reg))
                 {
-                    if (reg.IsMatch(simpleName) || reg.IsMatch(cleanFullName) || reg.IsMatch(api.Name))
-                    {
-                        anyMatched = true;
-                        break;
-                    }
-                }
-                else
-                {
-                    if (string.Equals(simpleName, p, StringComparison.OrdinalIgnoreCase) ||
-                        simpleName.Contains(p, StringComparison.OrdinalIgnoreCase) ||
-                        IsQualifiedSuffixMatch(cleanFullName, p) ||
-                        MatchesPascalCaseWord(simpleName, p) ||
-                        cleanFullName.Contains(p, StringComparison.OrdinalIgnoreCase))
-                    {
-                        anyMatched = true;
-                        break;
-                    }
+                    anyMatched = true;
+                    break;
                 }
             }
 
@@ -908,7 +1105,7 @@ public sealed class RoslynApiSearchEngine : IApiSearchEngine
         int? line = null;
         int? endLine = null;
 
-        var srcLoc = symbol.Locations.FirstOrDefault(l => l.IsInSource);
+        var srcLoc = !isExternal ? symbol.Locations.FirstOrDefault(l => l.IsInSource) : null;
         if (srcLoc != null)
         {
             var mapped = srcLoc.GetMappedLineSpan();
@@ -954,6 +1151,10 @@ public sealed class RoslynApiSearchEngine : IApiSearchEngine
             }
         }
 
+        var ns = symbol.ContainingNamespace is { IsGlobalNamespace: false } cns
+            ? cns.ToDisplayString()
+            : null;
+
         return new ApiDefinition(
             Name: symbol.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat),
             Kind: kind,
@@ -969,7 +1170,8 @@ public sealed class RoslynApiSearchEngine : IApiSearchEngine
             Line: line,
             EndLine: endLine,
             SymbolId: symbolId,
-            BaseTypes: baseTypes);
+            BaseTypes: baseTypes,
+            Namespace: ns);
     }
 
     private static ApiDefinition MapSymbolToApiDefinition(ISymbol symbol, string assembly, bool isExternal, string? summary, string? solutionDir = null)

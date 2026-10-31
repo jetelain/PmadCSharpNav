@@ -1029,11 +1029,12 @@ public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder,
 
         if (isMapped)
         {
-            var mappedSyntaxSpan = tree.GetMappedLineSpan(span);
-            if (mappedSyntaxSpan.HasMappedPath &&
-                string.Equals(mappedSyntaxSpan.Path, identifierSpan.Path, StringComparison.OrdinalIgnoreCase))
+            var endMappedSpan = tree.GetMappedLineSpan(new TextSpan(span.End, 0));
+            if (endMappedSpan.HasMappedPath &&
+                endMappedSpan.IsValid &&
+                string.Equals(endMappedSpan.Path, identifierSpan.Path, StringComparison.OrdinalIgnoreCase))
             {
-                return Math.Max(endLine, mappedSyntaxSpan.EndLinePosition.Line + 1);
+                return Math.Max(endLine, endMappedSpan.EndLinePosition.Line + 1);
             }
             return endLine;
         }

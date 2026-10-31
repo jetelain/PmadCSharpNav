@@ -20,4 +20,5 @@ public sealed record ApiDefinition(
     int? Line = null,
     int? EndLine = null,
     string? SymbolId = null,
-    IReadOnlyList<string>? BaseTypes = null);
+    IReadOnlyList<string>? BaseTypes = null,
+    string? Namespace = null);
