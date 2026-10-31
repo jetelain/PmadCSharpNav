@@ -50,6 +50,53 @@ public class SearchApiHandlerTests
         _searchEngine.LastCriteria!.Project.Should().Be("Pmad.CSharpNav.Cli");
         response.Scope.Should().Be("Pmad.CSharpNav.Cli");
     }
+
+    [Fact]
+    public async Task HandleAsync_Maps_SourceLocation_Obsolete_And_SymbolId_Fields()
+    {
+        var handler = new SearchApiHandler(_workspace, _searchEngine);
+
+        _searchEngine.SearchResults.Add(new ApiDefinition(
+            Name: "TestNamespace.MyService.Run",
+            Kind: SymbolKind.Method,
+            Signature: "void Run()",
+            ContainingType: "MyService",
+            Assembly: "MyAssembly",
+            IsExternal: false,
+            Summary: "Executes the service.",
+            IsObsolete: true,
+            ObsoleteMessage: "Deprecated.",
+            File: "src/Services/MyService.cs",
+            Line: 10,
+            EndLine: 20,
+            SymbolId: "M:TestNamespace.MyService.Run"));
+
+        var response = await handler.HandleAsync(new SearchApiRequest(
+            Patterns: new[] { "Run", "Service" },
+            Namespace: "TestNamespace",
+            Assembly: "MyAssembly",
+            IncludeObsolete: true,
+            InheritsFrom: "IService",
+            ReturnsType: "void"));
+
+        _searchEngine.LastCriteria.Should().NotBeNull();
+        _searchEngine.LastCriteria!.Patterns.Should().BeEquivalentTo(new[] { "Run", "Service" });
+        _searchEngine.LastCriteria.Namespace.Should().Be("TestNamespace");
+        _searchEngine.LastCriteria.Assembly.Should().Be("MyAssembly");
+        _searchEngine.LastCriteria.IncludeObsolete.Should().BeTrue();
+        _searchEngine.LastCriteria.InheritsFrom.Should().Be("IService");
+        _searchEngine.LastCriteria.ReturnsType.Should().Be("void");
+
+        response.Results.Should().HaveCount(1);
+        var result = response.Results[0];
+        result.File.Should().Be("src/Services/MyService.cs");
+        result.Line.Should().Be(10);
+        result.EndLine.Should().Be(20);
+        result.SymbolId.Should().Be("M:TestNamespace.MyService.Run");
+        result.IsObsolete.Should().BeTrue();
+        result.ObsoleteMessage.Should().Be("Deprecated.");
+        result.FullName.Should().Be("TestNamespace.MyService.Run");
+    }
 }
 
 public class ExploreTypeHandlerTests

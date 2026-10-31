@@ -29,7 +29,8 @@ public sealed record DefinitionItemDto(
     bool IsMetadata = false,
     bool IsGenerated = false,
     string? Snippet = null,
-    string? SymbolId = null);
+    string? SymbolId = null,
+    int? EndLine = null);
 
 public sealed record FindDefinitionResponse(
     DefinitionTargetDto Target,

@@ -1105,5 +1105,509 @@ public class WorkspaceSnapshotTests
         refsInA.Should().NotBeEmpty();
         refsInA.Should().OnlyContain(r => r.File.Contains("ProjectA", StringComparison.OrdinalIgnoreCase));
     }
+
+    [Fact]
+    public async Task RoslynApiSearchEngine_Populates_SourceLocation_And_SymbolId()
+    {
+        using var workspace = new AdhocWorkspace();
+        var coreLibRef = MetadataReference.CreateFromFile(typeof(object).Assembly.Location);
+
+        var proj = ProjectInfo.Create(
+            ProjectId.CreateNewId(),
+            VersionStamp.Create(),
+            "MyProject",
+            "MyProject",
+            LanguageNames.CSharp,
+            filePath: @"C:\Repo\src\MyProject\MyProject.csproj",
+            metadataReferences: [coreLibRef]);
+
+        var code = """
+            namespace SampleNamespace
+            {
+                public class UserService
+                {
+                    public void RegisterUser(string name)
+                    {
+                    }
+                }
+            }
+            """;
+
+        var doc = DocumentInfo.Create(
+            DocumentId.CreateNewId(proj.Id),
+            "UserService.cs",
+            filePath: @"C:\Repo\src\MyProject\UserService.cs",
+            loader: TextLoader.From(TextAndVersion.Create(
+                SourceText.From(code),
+                VersionStamp.Create())));
+
+        var solution = workspace.CurrentSolution
+            .AddProject(proj)
+            .AddDocument(doc);
+
+        var snapshot = new RoslynWorkspaceSnapshot(solution, @"C:\Repo\Solution.sln", 1);
+        var engine = new RoslynApiSearchEngine();
+
+        var results = await engine.SearchAsync(snapshot, new ApiSearchCriteria(
+            Pattern: "RegisterUser",
+            Scope: "source"));
+
+        results.Should().ContainSingle();
+        var match = results[0];
+        match.Name.Should().Contain("RegisterUser");
+        match.SymbolId.Should().NotBeNullOrEmpty();
+        match.SymbolId.Should().StartWith("M:SampleNamespace.UserService.RegisterUser");
+        match.File.Should().NotBeNullOrEmpty();
+        match.File.Should().Contain("UserService.cs");
+        match.File.Should().NotContain("C:");
+        match.Line.Should().Be(5);
+        match.EndLine.Should().Be(7);
+
+        var classResults = await engine.SearchAsync(snapshot, new ApiSearchCriteria(
+            Pattern: "UserService",
+            Scope: "source"));
+        classResults.Should().ContainSingle();
+        classResults[0].Line.Should().Be(3);
+        classResults[0].EndLine.Should().Be(8);
+    }
+
+    [Fact]
+    public async Task RoslynApiSearchEngine_RelevanceRanking_And_Patterns_MultiTermQuery()
+    {
+        using var workspace = new AdhocWorkspace();
+        var coreLibRef = MetadataReference.CreateFromFile(typeof(object).Assembly.Location);
+
+        var proj = ProjectInfo.Create(
+            ProjectId.CreateNewId(),
+            VersionStamp.Create(),
+            "RankingProject",
+            "RankingProject",
+            LanguageNames.CSharp,
+            filePath: @"C:\Repo\src\RankingProject\RankingProject.csproj",
+            metadataReferences: [coreLibRef]);
+
+        var code = """
+            namespace MyStore
+            {
+                // Tier 1: Exact Type Name matching "Order"
+                public class Order
+                {
+                }
+
+                public class Border
+                {
+                }
+
+                public class OrderProcessor
+                {
+                    // Tier 2: Exact Member Name matching "Order"
+                    public void Order() {}
+
+                    // Tier 4: Prefix / PascalCase word matching "Order"
+                    public void CreateOrder() {}
+
+                    // Tier 5: Substring matching "Order"
+                    public void RecordOrderInfo() {}
+                }
+            }
+            """;
+
+        var doc = DocumentInfo.Create(
+            DocumentId.CreateNewId(proj.Id),
+            "Store.cs",
+            filePath: @"C:\Repo\src\RankingProject\Store.cs",
+            loader: TextLoader.From(TextAndVersion.Create(
+                SourceText.From(code),
+                VersionStamp.Create())));
+
+        var solution = workspace.CurrentSolution
+            .AddProject(proj)
+            .AddDocument(doc);
+
+        var snapshot = new RoslynWorkspaceSnapshot(solution, @"C:\Repo\Solution.sln", 1);
+        var engine = new RoslynApiSearchEngine();
+
+        var results = await engine.SearchAsync(snapshot, new ApiSearchCriteria(
+            Patterns: new[] { "Order" },
+            Scope: "source"));
+
+        results.Should().NotBeEmpty();
+
+        // Exact Type Name (Tier 1) should be ranked first
+        results[0].Kind.Should().Be(Pmad.CSharpNav.Domain.SymbolKind.Class);
+        results[0].Name.Should().Be("MyStore.Order");
+
+        // Exact Member Name (Tier 2) should come after Tier 1
+        results[1].Kind.Should().Be(Pmad.CSharpNav.Domain.SymbolKind.Method);
+        results[1].Name.Should().Contain("OrderProcessor.Order");
+
+        var resultsList = results.ToList();
+
+        // PascalCase Word Match (Tier 4) e.g. CreateOrder
+        var createOrderIndex = resultsList.FindIndex(r => r.Name.Contains("CreateOrder"));
+        createOrderIndex.Should().BeGreaterThan(1);
+
+        // Substring match e.g. Border (Tier 5) should come after Tier 1
+        var borderIndex = resultsList.FindIndex(r => r.Name.Contains("Border"));
+        borderIndex.Should().BeGreaterThan(createOrderIndex);
+    }
+
+    [Fact]
+    public async Task RoslynReferenceFinder_FindDefinitions_Populates_EndLine()
+    {
+        using var workspace = new AdhocWorkspace();
+        var coreLibRef = MetadataReference.CreateFromFile(typeof(object).Assembly.Location);
+
+        var proj = ProjectInfo.Create(
+            ProjectId.CreateNewId(),
+            VersionStamp.Create(),
+            "DefProject",
+            "DefProject",
+            LanguageNames.CSharp,
+            filePath: @"C:\Repo\src\DefProject\DefProject.csproj",
+            metadataReferences: [coreLibRef]);
+
+        var code = """
+            namespace DefNamespace
+            {
+                public class Calculator
+                {
+                    public int Add(int a, int b)
+                    {
+                        return a + b;
+                    }
+                }
+            }
+            """;
+
+        var doc = DocumentInfo.Create(
+            DocumentId.CreateNewId(proj.Id),
+            "Calculator.cs",
+            filePath: @"C:\Repo\src\DefProject\Calculator.cs",
+            loader: TextLoader.From(TextAndVersion.Create(
+                SourceText.From(code),
+                VersionStamp.Create())));
+
+        var solution = workspace.CurrentSolution
+            .AddProject(proj)
+            .AddDocument(doc);
+
+        var snapshot = new RoslynWorkspaceSnapshot(solution, @"C:\Repo\Solution.sln", 1);
+        var finder = new RoslynReferenceFinder();
+        var symbolId = new SymbolIdentifier("DefProject", "DefNamespace", "Calculator", "int Add(int a, int b)", null);
+
+        var definitions = await finder.FindDefinitionsAsync(
+            snapshot,
+            symbolId,
+            new DefinitionSearchOptions());
+
+        definitions.Should().NotBeEmpty();
+        var def = definitions[0];
+        def.Line.Should().Be(5);
+        def.EndLine.Should().Be(8);
+    }
+
+    [Fact]
+    public async Task RoslynApiSearchEngine_SearchAsync_Handles_GenericMembers_Acronyms_Kind_InheritsFrom_And_ReturnsType()
+    {
+        using var workspace = new AdhocWorkspace();
+        var coreLibRef = MetadataReference.CreateFromFile(typeof(object).Assembly.Location);
+
+        var proj = ProjectInfo.Create(
+            ProjectId.CreateNewId(),
+            VersionStamp.Create(),
+            "AdvancedSearchProject",
+            "AdvancedSearchProject",
+            LanguageNames.CSharp,
+            filePath: @"C:\Repo\src\AdvancedSearchProject\AdvancedSearchProject.csproj",
+            metadataReferences: [coreLibRef]);
+
+        var code = """
+            using System;
+            using System.Threading.Tasks;
+
+            namespace MyDomain.Services
+            {
+                public interface IEntityRepository
+                {
+                }
+
+                public record OrderCreatedRecord(int OrderId);
+
+                public class Repository<T> : IEntityRepository
+                {
+                    public event EventHandler? ItemSaved;
+
+                    public Repository()
+                    {
+                    }
+
+                    public Task<OrderCreatedRecord> SaveAsync(T item) => Task.FromResult(new OrderCreatedRecord(1));
+
+                    public void ProcessWithParam(int count, OrderCreatedRecord recordParam)
+                    {
+                    }
+                }
+
+                public class XMLParser
+                {
+                }
+            }
+            """;
+
+        var doc = DocumentInfo.Create(
+            DocumentId.CreateNewId(proj.Id),
+            "Domain.cs",
+            filePath: @"C:\Repo\src\AdvancedSearchProject\Domain.cs",
+            loader: TextLoader.From(TextAndVersion.Create(
+                SourceText.From(code),
+                VersionStamp.Create())));
+
+        var solution = workspace.CurrentSolution
+            .AddProject(proj)
+            .AddDocument(doc);
+
+        var snapshot = new RoslynWorkspaceSnapshot(solution, @"C:\Repo\Solution.sln", 1);
+        var tempCacheDir = Path.Combine(Path.GetTempPath(), "csnav_cache_" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var engine = new RoslynApiSearchEngine(tempCacheDir);
+
+            // 1. Qualified suffix match on member of generic type (Repository<T>.SaveAsync matched via "Repository.SaveAsync")
+            var genericMemberMatches = await engine.SearchAsync(snapshot, new ApiSearchCriteria(
+                Pattern: "Repository.SaveAsync",
+                Scope: "source"));
+            genericMemberMatches.Should().ContainSingle(m => m.Name.Contains("SaveAsync"));
+
+            // 2. Wildcard qualified pattern "Repository.Save*"
+            var wildcardQualifiedMatches = await engine.SearchAsync(snapshot, new ApiSearchCriteria(
+                Pattern: "Repository.Save*",
+                Scope: "source"));
+            wildcardQualifiedMatches.Should().ContainSingle(m => m.Name.Contains("SaveAsync"));
+
+            // 3. Kind filter for "record", "event", "constructor"
+            var recordMatches = await engine.SearchAsync(snapshot, new ApiSearchCriteria(
+                Kind: "record",
+                Scope: "source"));
+            recordMatches.Should().ContainSingle(m => m.Name.Contains("OrderCreatedRecord"));
+
+            var eventMatches = await engine.SearchAsync(snapshot, new ApiSearchCriteria(
+                Kind: "event",
+                Scope: "source"));
+            eventMatches.Should().ContainSingle(m => m.Name.Contains("ItemSaved"));
+
+            var ctorMatches = await engine.SearchAsync(snapshot, new ApiSearchCriteria(
+                Kind: "constructor",
+                Scope: "source"));
+            ctorMatches.Should().Contain(m => m.Kind == Pmad.CSharpNav.Domain.SymbolKind.Constructor && m.Name.Contains("Repository"));
+
+            // 4. ReturnsType matches Task<OrderCreatedRecord> via "OrderCreatedRecord", and does NOT match parameter type in ProcessWithParam
+            var returnsMatches = await engine.SearchAsync(snapshot, new ApiSearchCriteria(
+                ReturnsType: "OrderCreatedRecord",
+                Scope: "source"));
+            returnsMatches.Should().ContainSingle(m => m.Name.Contains("SaveAsync"));
+            returnsMatches.Should().NotContain(m => m.Name.Contains("ProcessWithParam"));
+
+            // 5. InheritsFrom with Scope = "all" does NOT leak external BCL symbols that don't implement IEntityRepository
+            var inheritsAllScope = await engine.SearchAsync(snapshot, new ApiSearchCriteria(
+                InheritsFrom: "IEntityRepository",
+                Scope: "all"));
+            inheritsAllScope.Should().ContainSingle(m => m.Name.Contains("Repository"));
+            inheritsAllScope.Should().OnlyContain(m => !m.IsExternal);
+
+            // 6. PascalCase word boundary after acronym ("XMLParser" matches "Parser" at Tier 4 before substring matches)
+            var acronymMatches = await engine.SearchAsync(snapshot, new ApiSearchCriteria(
+                Pattern: "Parser",
+                Scope: "source"));
+            acronymMatches.Should().ContainSingle(m => m.Name.Contains("XMLParser"));
+
+            // 7. Namespace filter does not confuse ContainingType with Namespace
+            var wrongNsMatches = await engine.SearchAsync(snapshot, new ApiSearchCriteria(
+                Namespace: "MyDomain.Services.Repository",
+                Scope: "source"));
+            wrongNsMatches.Should().BeEmpty();
+        }
+        finally
+        {
+            if (Directory.Exists(tempCacheDir))
+            {
+                Directory.Delete(tempCacheDir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task RoslynApiSearchEngine_SearchAsync_Handles_GenericTypeArgs_WildcardParamExclusion_And_RegexPatterns()
+    {
+        using var workspace = new AdhocWorkspace();
+        var coreLibRef = MetadataReference.CreateFromFile(typeof(object).Assembly.Location);
+
+        var proj = ProjectInfo.Create(
+            ProjectId.CreateNewId(),
+            VersionStamp.Create(),
+            "GenericTypeMatchProject",
+            "GenericTypeMatchProject",
+            LanguageNames.CSharp,
+            filePath: @"C:\Repo\src\GenericTypeMatchProject\GenericTypeMatchProject.csproj",
+            metadataReferences: [coreLibRef]);
+
+        var code = """
+            using System;
+            using System.Collections.Generic;
+            using System.Threading.Tasks;
+
+            namespace MyDomain.Catalog
+            {
+                public class OrderItem {}
+                public class CustomerItem {}
+
+                public interface IStore<T> {}
+
+                public class OrderStore : IStore<OrderItem>
+                {
+                    public Task<OrderItem> GetOrderAsync() => Task.FromResult(new OrderItem());
+                    public Task<IReadOnlyList<OrderItem>> ListOrdersAsync() => Task.FromResult<IReadOnlyList<OrderItem>>(Array.Empty<OrderItem>());
+                    public OrderItem[] GetOrderArray() => Array.Empty<OrderItem>();
+                    public void AuditCustomer(CustomerItem customer) {}
+                }
+
+                public class CustomerStore : IStore<CustomerItem>
+                {
+                    public Task<CustomerItem> GetCustomerAsync() => Task.FromResult(new CustomerItem());
+                }
+
+                public class GenericBox<T>
+                {
+                }
+            }
+            """;
+
+        var doc = DocumentInfo.Create(
+            DocumentId.CreateNewId(proj.Id),
+            "Catalog.cs",
+            filePath: @"C:\Repo\src\GenericTypeMatchProject\Catalog.cs",
+            loader: TextLoader.From(TextAndVersion.Create(
+                SourceText.From(code),
+                VersionStamp.Create())));
+
+        var solution = workspace.CurrentSolution
+            .AddProject(proj)
+            .AddDocument(doc);
+
+        var snapshot = new RoslynWorkspaceSnapshot(solution, @"C:\Repo\Solution.sln", 1);
+        var engine = new RoslynApiSearchEngine();
+
+        // 1. InheritsFrom with specific generic argument IStore<OrderItem> only matches OrderStore, NOT CustomerStore
+        var orderStores = await engine.SearchAsync(snapshot, new ApiSearchCriteria(
+            InheritsFrom: "IStore<OrderItem>",
+            Scope: "source"));
+        orderStores.Should().ContainSingle(m => m.Name.Contains("OrderStore"));
+        orderStores.Should().NotContain(m => m.Name.Contains("CustomerStore"));
+
+        // 2. ReturnsType with specific generic argument Task<OrderItem> only matches GetOrderAsync, NOT GetCustomerAsync
+        var taskOrderMethods = await engine.SearchAsync(snapshot, new ApiSearchCriteria(
+            ReturnsType: "Task<OrderItem>",
+            Scope: "source"));
+        taskOrderMethods.Should().ContainSingle(m => m.Name.Contains("GetOrderAsync"));
+        taskOrderMethods.Should().NotContain(m => m.Name.Contains("GetCustomerAsync"));
+
+        // 3. ReturnsType "OrderItem" matches direct, nested generic Task<IReadOnlyList<OrderItem>>, and array OrderItem[]
+        var allOrderReturnMethods = await engine.SearchAsync(snapshot, new ApiSearchCriteria(
+            ReturnsType: "OrderItem",
+            Scope: "source"));
+        allOrderReturnMethods.Should().Contain(m => m.Name.Contains("GetOrderAsync"));
+        allOrderReturnMethods.Should().Contain(m => m.Name.Contains("ListOrdersAsync"));
+        allOrderReturnMethods.Should().Contain(m => m.Name.Contains("GetOrderArray"));
+        allOrderReturnMethods.Should().NotContain(m => m.Name.Contains("GetCustomerAsync"));
+
+        // 4. Wildcard pattern "*CustomerItem*" does NOT falsely match AuditCustomer(CustomerItem) via parameter type
+        var wildcardCustomer = await engine.SearchAsync(snapshot, new ApiSearchCriteria(
+            Pattern: "*CustomerItem*",
+            Scope: "source"));
+        wildcardCustomer.Should().ContainSingle(m => m.Name == "MyDomain.Catalog.CustomerItem");
+        wildcardCustomer.Should().NotContain(m => m.Name.Contains("AuditCustomer"));
+
+        // 5. Pattern with generic parameter "GenericBox<T>" matches GenericBox<T> at Tier 1
+        var genericBoxMatch = await engine.SearchAsync(snapshot, new ApiSearchCriteria(
+            Pattern: "GenericBox<T>",
+            Scope: "source"));
+        genericBoxMatch.Should().ContainSingle(m => m.Name.Contains("GenericBox"));
+
+        // 6. Regex pattern "^Order.*Store$" matches OrderStore
+        var regexMatches = await engine.SearchAsync(snapshot, new ApiSearchCriteria(
+            Pattern: "^Order.*Store$",
+            Scope: "source"));
+        regexMatches.Should().ContainSingle(m => m.Name.Contains("OrderStore"));
+    }
+
+    [Fact]
+    public async Task RoslynReferenceFinder_FindDefinitions_MappedFileWithUnmappedEnd_DoesNotReturnGeneratedEndLine()
+    {
+        using var workspace = new AdhocWorkspace();
+        var coreLibRef = MetadataReference.CreateFromFile(typeof(object).Assembly.Location);
+
+        var proj = ProjectInfo.Create(
+            ProjectId.CreateNewId(),
+            VersionStamp.Create(),
+            "RazorDefProject",
+            "RazorDefProject",
+            LanguageNames.CSharp,
+            filePath: @"C:\Repo\src\RazorDefProject\RazorDefProject.csproj",
+            metadataReferences: [coreLibRef]);
+
+        var generatedCode = """
+            namespace RazorDefNamespace
+            {
+            #line 3 "C:\\Repo\\src\\RazorDefProject\\Counter.razor"
+                public class Counter
+                {
+                    public void Increment()
+                    {
+                    }
+            #line default
+            #line hidden
+                    // Many lines of generated scaffold
+                    private int _hidden1;
+                    private int _hidden2;
+                    private int _hidden3;
+                    private int _hidden4;
+                }
+            }
+            """;
+
+        var doc = DocumentInfo.Create(
+            DocumentId.CreateNewId(proj.Id),
+            "Counter.razor.g.cs",
+            filePath: @"C:\Repo\src\RazorDefProject\obj\Counter.razor.g.cs",
+            loader: TextLoader.From(TextAndVersion.Create(
+                SourceText.From(generatedCode),
+                VersionStamp.Create())));
+
+        var solution = workspace.CurrentSolution
+            .AddProject(proj)
+            .AddDocument(doc);
+
+        var snapshot = new RoslynWorkspaceSnapshot(solution, @"C:\Repo\Solution.sln", 1);
+        var finder = new RoslynReferenceFinder();
+
+        // Increment() has both start and end inside #line 3 "Counter.razor" (lines 5 to 7 in Counter.razor)
+        var methodDefs = await finder.FindDefinitionsAsync(
+            snapshot,
+            new SymbolIdentifier("RazorDefProject", "RazorDefNamespace", "Counter", "void Increment()", null),
+            new DefinitionSearchOptions());
+        methodDefs.Should().ContainSingle();
+        methodDefs[0].Line.Should().Be(5);
+        methodDefs[0].EndLine.Should().Be(7);
+
+        // Counter class starts inside #line 3 "Counter.razor" (line 3), but its closing brace is after #line default (line 16 of .g.cs).
+        // EndLine should not leak the unmapped .g.cs line 16.
+        var classDefs = await finder.FindDefinitionsAsync(
+            snapshot,
+            new SymbolIdentifier("RazorDefProject", "RazorDefNamespace", "RazorDefNamespace.Counter", null, "T:RazorDefNamespace.Counter"),
+            new DefinitionSearchOptions());
+        classDefs.Should().ContainSingle();
+        classDefs[0].Line.Should().Be(3);
+        classDefs[0].EndLine.Should().Be(3);
+    }
 }
 

@@ -15,7 +15,7 @@ public static class ServerCommand
         statusCmd.SetAction(async (parseResult, ct) =>
         {
             var specifiedSolution = parseResult.GetValue(globals.SolutionOption);
-            var format = parseResult.GetValue(globals.FormatOption) ?? "markdown";
+            var format = parseResult.GetValue(globals.FormatOption) ?? GlobalOptions.GetDefaultFormat();
 
             try
             {
@@ -75,11 +75,27 @@ public static class ServerCommand
         startCmd.SetAction(async (parseResult, ct) =>
         {
             var specifiedSolution = parseResult.GetValue(globals.SolutionOption);
+            var format = parseResult.GetValue(globals.FormatOption) ?? GlobalOptions.GetDefaultFormat();
             try
             {
                 var solutionPath = NavDaemonClient.ResolveSolutionPath(specifiedSolution);
-                var info = await client.EnsureDaemonRunningAsync(solutionPath, ct);
-                Console.WriteLine(string.Format(CultureInfo.InvariantCulture, "Server is running on port {0} (PID: {1})", info.Port, info.Pid));
+                var info = await client.EnsureStartedAsync(solutionPath, Console.Error, ct);
+                if (format.Equals("json", StringComparison.OrdinalIgnoreCase))
+                {
+                    var payload = new ServerStartResponse(
+                        Version: info.Version,
+                        Pid: info.Pid,
+                        Port: info.Port,
+                        Token: info.Token,
+                        SolutionPath: info.SolutionPath,
+                        StartedAt: info.StartedAt,
+                        Url: $"http://127.0.0.1:{info.Port}");
+                    Console.WriteLine(NavJsonSerializer.Serialize(payload));
+                }
+                else
+                {
+                    Console.WriteLine(string.Format(CultureInfo.InvariantCulture, "Server is running on port {0} (PID: {1})", info.Port, info.Pid));
+                }
                 return 0;
             }
             catch (Exception ex)

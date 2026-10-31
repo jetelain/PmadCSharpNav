@@ -20,6 +20,7 @@ public sealed class CliCommandVerbTests
         root.Add(SearchCommand.Create(globals, client));
         root.Add(InspectCommand.Create(globals, client));
         root.Add(DecompileCommand.Create(globals, client));
+        root.Add(ServerCommand.Create(globals, client));
         return root;
     }
 
@@ -91,6 +92,22 @@ public sealed class CliCommandVerbTests
 
         parseResult.Errors.Should().BeEmpty();
         parseResult.CommandResult.Command.Name.Should().Be("inspect");
+    }
+
+    [Theory]
+    [InlineData("server start")]
+    [InlineData("server start --format json")]
+    [InlineData("server status")]
+    [InlineData("server status --format json")]
+    [InlineData("server stop")]
+    public void Server_Command_Parses_Successfully(string commandLine)
+    {
+        var root = CreateTestRoot();
+        var parseResult = root.Parse(commandLine);
+
+        parseResult.Errors.Should().BeEmpty();
+        var cmd = parseResult.CommandResult.Command;
+        cmd.Parents.Should().Contain(p => p.Name == "server");
     }
 
 #pragma warning disable CS0618 // Type or member is obsolete

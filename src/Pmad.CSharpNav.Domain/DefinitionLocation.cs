@@ -14,4 +14,5 @@ public sealed record DefinitionLocation(
     SymbolKind? Kind = null,
     bool IsMetadata = false,
     bool IsGenerated = false,
-    string? SymbolId = null);
+    string? SymbolId = null,
+    int? EndLine = null);

@@ -62,7 +62,8 @@ public class FindDefinitionHandlerTests
             Snippet: "public void ProcessOrder()",
             ContainingMember: "ProcessOrder",
             ContainingType: "Ns.OrderService",
-            Kind: SymbolKind.Method));
+            Kind: SymbolKind.Method,
+            EndLine: 50));
 
         var response = await handler.HandleAsync(new FindDefinitionRequest(
             File: "src/Caller.cs",
@@ -74,6 +75,7 @@ public class FindDefinitionHandlerTests
         response.TotalDefinitions.Should().Be(1);
         response.Definitions[0].File.Should().Be("src/OrderService.cs");
         response.Definitions[0].Line.Should().Be(42);
+        response.Definitions[0].EndLine.Should().Be(50);
         response.Definitions[0].Column.Should().Be(14);
         response.Definitions[0].Snippet.Should().Contain("ProcessOrder");
     }

@@ -25,7 +25,13 @@ public sealed class SearchApiHandler
             Kind: request.Kind,
             Access: request.Access,
             Framework: request.Framework,
-            Project: request.Project);
+            Project: request.Project,
+            Namespace: request.Namespace,
+            Assembly: request.Assembly,
+            IncludeObsolete: request.IncludeObsolete,
+            InheritsFrom: request.InheritsFrom,
+            ReturnsType: request.ReturnsType,
+            Patterns: request.Patterns);
 
         var allMatches = await _searchEngine.SearchAsync(snapshot, criteria, ct);
 
@@ -42,15 +48,37 @@ public sealed class SearchApiHandler
                 ContainingType: m.ContainingType,
                 Assembly: m.Assembly,
                 IsExternal: m.IsExternal,
-                Summary: m.Summary))
+                Summary: m.Summary,
+                IsObsolete: m.IsObsolete,
+                ObsoleteMessage: m.ObsoleteMessage,
+                File: m.File,
+                Line: m.Line,
+                EndLine: m.EndLine,
+                SymbolId: m.SymbolId))
             .ToList();
 
         var total = allMatches.Count;
         var truncated = (offset + pagedResults.Count) < total;
         var nextOffset = truncated ? offset + pagedResults.Count : (int?)null;
 
-        var queryDescription = !string.IsNullOrWhiteSpace(request.Pattern)
-            ? request.Pattern
+        var queryTerms = new List<string>();
+        if (!string.IsNullOrWhiteSpace(request.Pattern))
+        {
+            queryTerms.Add(request.Pattern);
+        }
+        if (request.Patterns != null)
+        {
+            foreach (var p in request.Patterns)
+            {
+                if (!string.IsNullOrWhiteSpace(p) && !queryTerms.Contains(p, StringComparer.OrdinalIgnoreCase))
+                {
+                    queryTerms.Add(p);
+                }
+            }
+        }
+
+        var queryDescription = queryTerms.Count > 0
+            ? string.Join(", ", queryTerms)
             : (!string.IsNullOrWhiteSpace(request.Doc) ? $"doc:{request.Doc}" : "*");
 
         var effectiveScope = !string.IsNullOrWhiteSpace(request.Project)
