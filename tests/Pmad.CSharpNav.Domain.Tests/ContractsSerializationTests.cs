@@ -79,4 +79,106 @@ public class ContractsSerializationTests
         deserialized!.Query.Should().Be("hash password");
         deserialized.Results[0].IsExternal.Should().BeTrue();
     }
+
+    [Fact]
+    public void ServerStartResponse_Serializes_Expected_Json_Fields()
+    {
+        var startedAt = new DateTimeOffset(2026, 10, 31, 10, 30, 0, TimeSpan.Zero);
+        var payload = new ServerStartResponse(
+            Version: 1,
+            Pid: 12345,
+            Port: 54321,
+            Token: "a1b2c3d4",
+            SolutionPath: "C:\\path\\to\\Solution.sln",
+            StartedAt: startedAt,
+            Url: "http://127.0.0.1:54321");
+
+        var json = NavJsonSerializer.Serialize(payload);
+        json.Should().Contain("\"version\":1");
+        json.Should().Contain("\"pid\":12345");
+        json.Should().Contain("\"port\":54321");
+        json.Should().Contain("\"token\":\"a1b2c3d4\"");
+        json.Should().Contain("\"solutionPath\":\"C:\\\\path\\\\to\\\\Solution.sln\"");
+        json.Should().Contain("\"url\":\"http://127.0.0.1:54321\"");
+
+        var deserialized = NavJsonSerializer.Deserialize<ServerStartResponse>(json);
+        deserialized.Should().NotBeNull();
+        deserialized!.Port.Should().Be(54321);
+        deserialized.Token.Should().Be("a1b2c3d4");
+        deserialized.Url.Should().Be("http://127.0.0.1:54321");
+    }
+
+    [Fact]
+    public void ApiSearchResultDto_SourceLocation_And_SymbolId_Serialize_Correctly()
+    {
+        var dto = new ApiSearchResultDto(
+            Name: "MyClass.DoSomething",
+            Kind: "Method",
+            Signature: "public void DoSomething()",
+            ContainingType: "MyClass",
+            Assembly: "MyAssembly",
+            IsExternal: false,
+            Summary: "Does something.",
+            IsObsolete: true,
+            ObsoleteMessage: "Use DoSomethingElse instead.",
+            File: "src/MyClass.cs",
+            Line: 42,
+            EndLine: 50,
+            SymbolId: "M:MyClass.DoSomething");
+
+        dto.FullName.Should().Be("MyClass.DoSomething");
+
+        var json = NavJsonSerializer.Serialize(dto);
+        json.Should().Contain("\"file\":\"src/MyClass.cs\"");
+        json.Should().Contain("\"line\":42");
+        json.Should().Contain("\"endLine\":50");
+        json.Should().Contain("\"symbolId\":\"M:MyClass.DoSomething\"");
+        json.Should().Contain("\"isObsolete\":true");
+        json.Should().Contain("\"obsoleteMessage\":\"Use DoSomethingElse instead.\"");
+        json.Should().Contain("\"fullName\":\"MyClass.DoSomething\"");
+
+        var deserialized = NavJsonSerializer.Deserialize<ApiSearchResultDto>(json);
+        deserialized.Should().NotBeNull();
+        deserialized!.File.Should().Be("src/MyClass.cs");
+        deserialized.Line.Should().Be(42);
+        deserialized.EndLine.Should().Be(50);
+        deserialized.SymbolId.Should().Be("M:MyClass.DoSomething");
+        deserialized.IsObsolete.Should().BeTrue();
+        deserialized.ObsoleteMessage.Should().Be("Use DoSomethingElse instead.");
+    }
+
+    [Fact]
+    public void DefinitionItemDto_EndLine_Serializes_Correctly()
+    {
+        var dto = new DefinitionItemDto(
+            File: "src/Program.cs",
+            Line: 10,
+            Column: 5,
+            Kind: "Method",
+            ContainingMember: "Main",
+            EndLine: 25);
+
+        var json = NavJsonSerializer.Serialize(dto);
+        json.Should().Contain("\"endLine\":25");
+
+        var deserialized = NavJsonSerializer.Deserialize<DefinitionItemDto>(json);
+        deserialized.Should().NotBeNull();
+        deserialized!.Line.Should().Be(10);
+        deserialized.EndLine.Should().Be(25);
+    }
+
+    [Fact]
+    public void SearchApiRequest_Patterns_Serializes_Correctly()
+    {
+        var req = new SearchApiRequest(
+            Pattern: "Foo",
+            Patterns: new[] { "Bar", "Baz" });
+
+        var json = NavJsonSerializer.Serialize(req);
+        json.Should().Contain("\"patterns\":[\"Bar\",\"Baz\"]");
+
+        var deserialized = NavJsonSerializer.Deserialize<SearchApiRequest>(json);
+        deserialized.Should().NotBeNull();
+        deserialized!.Patterns.Should().BeEquivalentTo(new[] { "Bar", "Baz" });
+    }
 }

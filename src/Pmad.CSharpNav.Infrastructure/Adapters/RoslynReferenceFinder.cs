@@ -756,8 +756,10 @@ public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder,
                     }
                 }
 
-                var line = (isMapped ? mapped.StartLinePosition.Line : loc.GetLineSpan().StartLinePosition.Line) + 1;
-                var col = (isMapped ? mapped.StartLinePosition.Character : loc.GetLineSpan().StartLinePosition.Character) + 1;
+                var span = isMapped ? mapped : loc.GetLineSpan();
+                var line = span.StartLinePosition.Line + 1;
+                var col = span.StartLinePosition.Character + 1;
+                var endLine = span.EndLinePosition.Line + 1;
 
                 SourceText sourceText;
                 if (isMapped)
@@ -782,7 +784,8 @@ public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder,
                     Kind: MapSymbolKind(targetSymbol),
                     IsMetadata: false,
                     IsGenerated: isGen,
-                    SymbolId: targetSymbol.GetDocumentationCommentId()));
+                    SymbolId: targetSymbol.GetDocumentationCommentId(),
+                    EndLine: endLine));
             }
         }
         else

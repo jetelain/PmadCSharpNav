@@ -12,6 +12,15 @@ public sealed record DiscoveryInfo(
     string SolutionPath,
     DateTimeOffset StartedAt);
 
+public sealed record ServerStartResponse(
+    int Version,
+    int Pid,
+    int Port,
+    string Token,
+    string SolutionPath,
+    DateTimeOffset StartedAt,
+    string Url);
+
 public static class NavDiscovery
 {
     public static string ComputeSolutionHash(string solutionPath)

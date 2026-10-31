@@ -102,6 +102,18 @@ public sealed class NavDaemonClient : IDisposable
         throw new TimeoutException("Failed to communicate with csnav daemon within 20 seconds.");
     }
 
+    public Task<DiscoveryInfo> EnsureStartedAsync(string solutionPath, CancellationToken ct = default)
+        => EnsureDaemonRunningAsync(solutionPath, ct);
+
+    public Task<DiscoveryInfo> EnsureStartedAsync(string solutionPath, TextWriter? progress, CancellationToken ct = default)
+        => EnsureDaemonRunningAsync(solutionPath, ct);
+
+    public Task<DiscoveryInfo> EnsureStartedWithInfoAsync(string solutionPath, CancellationToken ct = default)
+        => EnsureDaemonRunningAsync(solutionPath, ct);
+
+    public Task<DiscoveryInfo> EnsureStartedWithInfoAsync(string solutionPath, TextWriter? progress, CancellationToken ct = default)
+        => EnsureDaemonRunningAsync(solutionPath, ct);
+
     private static async Task<IDisposable> AcquireSolutionLockAsync(string solutionPath, TimeSpan timeout, CancellationToken ct)
     {
         var lockFilePath = NavDiscovery.GetLockFilePath(solutionPath);

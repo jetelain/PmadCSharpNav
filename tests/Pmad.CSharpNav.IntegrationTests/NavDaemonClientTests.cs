@@ -50,6 +50,27 @@ public sealed class NavDaemonClientTests : IDisposable
     }
 
     [Fact]
+    public void EnsureStartedAsync_Methods_Exist_And_Accept_Expected_Signatures()
+    {
+        using var client = new NavDaemonClient();
+        var method1 = typeof(NavDaemonClient).GetMethod(nameof(NavDaemonClient.EnsureStartedAsync), new[] { typeof(string), typeof(CancellationToken) });
+        method1.Should().NotBeNull();
+        method1!.ReturnType.Should().Be<Task<DiscoveryInfo>>();
+
+        var method2 = typeof(NavDaemonClient).GetMethod(nameof(NavDaemonClient.EnsureStartedAsync), new[] { typeof(string), typeof(TextWriter), typeof(CancellationToken) });
+        method2.Should().NotBeNull();
+        method2!.ReturnType.Should().Be<Task<DiscoveryInfo>>();
+
+        var method3 = typeof(NavDaemonClient).GetMethod(nameof(NavDaemonClient.EnsureStartedWithInfoAsync), new[] { typeof(string), typeof(CancellationToken) });
+        method3.Should().NotBeNull();
+        method3!.ReturnType.Should().Be<Task<DiscoveryInfo>>();
+
+        var method4 = typeof(NavDaemonClient).GetMethod(nameof(NavDaemonClient.EnsureStartedWithInfoAsync), new[] { typeof(string), typeof(TextWriter), typeof(CancellationToken) });
+        method4.Should().NotBeNull();
+        method4!.ReturnType.Should().Be<Task<DiscoveryInfo>>();
+    }
+
+    [Fact]
     public void WindowsProcessLauncher_OnWindows_CanSpawnProcessViaWmi()
     {
         if (!OperatingSystem.IsWindows())

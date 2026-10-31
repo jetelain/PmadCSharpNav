@@ -9,7 +9,13 @@ public sealed record SearchApiRequest(
     string? Framework = null,
     int Limit = NavConstants.DefaultLimit,
     int Offset = 0,
-    string? Project = null);
+    string? Project = null,
+    string? Namespace = null,
+    string? Assembly = null,
+    bool IncludeObsolete = false,
+    string? InheritsFrom = null,
+    string? ReturnsType = null,
+    IReadOnlyList<string>? Patterns = null);
 
 public sealed record ApiSearchResultDto(
     string Name,
@@ -18,7 +24,16 @@ public sealed record ApiSearchResultDto(
     string? ContainingType = null,
     string? Assembly = null,
     bool IsExternal = false,
-    string? Summary = null);
+    string? Summary = null,
+    bool IsObsolete = false,
+    string? ObsoleteMessage = null,
+    string? File = null,
+    int? Line = null,
+    int? EndLine = null,
+    string? SymbolId = null)
+{
+    public string FullName => Name;
+}
 
 public sealed record SearchApiResponse(
     string Query,

@@ -1105,5 +1105,199 @@ public class WorkspaceSnapshotTests
         refsInA.Should().NotBeEmpty();
         refsInA.Should().OnlyContain(r => r.File.Contains("ProjectA", StringComparison.OrdinalIgnoreCase));
     }
+
+    [Fact]
+    public async Task RoslynApiSearchEngine_Populates_SourceLocation_And_SymbolId()
+    {
+        using var workspace = new AdhocWorkspace();
+        var coreLibRef = MetadataReference.CreateFromFile(typeof(object).Assembly.Location);
+
+        var proj = ProjectInfo.Create(
+            ProjectId.CreateNewId(),
+            VersionStamp.Create(),
+            "MyProject",
+            "MyProject",
+            LanguageNames.CSharp,
+            filePath: @"C:\Repo\src\MyProject\MyProject.csproj",
+            metadataReferences: [coreLibRef]);
+
+        var code = """
+            namespace SampleNamespace
+            {
+                public class UserService
+                {
+                    public void RegisterUser(string name)
+                    {
+                    }
+                }
+            }
+            """;
+
+        var doc = DocumentInfo.Create(
+            DocumentId.CreateNewId(proj.Id),
+            "UserService.cs",
+            filePath: @"C:\Repo\src\MyProject\UserService.cs",
+            loader: TextLoader.From(TextAndVersion.Create(
+                SourceText.From(code),
+                VersionStamp.Create())));
+
+        var solution = workspace.CurrentSolution
+            .AddProject(proj)
+            .AddDocument(doc);
+
+        var snapshot = new RoslynWorkspaceSnapshot(solution, @"C:\Repo\Solution.sln", 1);
+        var engine = new RoslynApiSearchEngine();
+
+        var results = await engine.SearchAsync(snapshot, new ApiSearchCriteria(
+            Pattern: "RegisterUser",
+            Scope: "source"));
+
+        results.Should().ContainSingle();
+        var match = results[0];
+        match.Name.Should().Contain("RegisterUser");
+        match.SymbolId.Should().NotBeNullOrEmpty();
+        match.SymbolId.Should().StartWith("M:SampleNamespace.UserService.RegisterUser");
+        match.File.Should().NotBeNullOrEmpty();
+        match.File.Should().Contain("UserService.cs");
+        match.File.Should().NotContain("C:");
+        match.Line.Should().Be(5);
+        match.EndLine.Should().Be(5);
+    }
+
+    [Fact]
+    public async Task RoslynApiSearchEngine_RelevanceRanking_And_Patterns_MultiTermQuery()
+    {
+        using var workspace = new AdhocWorkspace();
+        var coreLibRef = MetadataReference.CreateFromFile(typeof(object).Assembly.Location);
+
+        var proj = ProjectInfo.Create(
+            ProjectId.CreateNewId(),
+            VersionStamp.Create(),
+            "RankingProject",
+            "RankingProject",
+            LanguageNames.CSharp,
+            filePath: @"C:\Repo\src\RankingProject\RankingProject.csproj",
+            metadataReferences: [coreLibRef]);
+
+        var code = """
+            namespace MyStore
+            {
+                // Tier 1: Exact Type Name matching "Order"
+                public class Order
+                {
+                }
+
+                public class Border
+                {
+                }
+
+                public class OrderProcessor
+                {
+                    // Tier 2: Exact Member Name matching "Order"
+                    public void Order() {}
+
+                    // Tier 4: Prefix / PascalCase word matching "Order"
+                    public void CreateOrder() {}
+
+                    // Tier 5: Substring matching "Order"
+                    public void RecordOrderInfo() {}
+                }
+            }
+            """;
+
+        var doc = DocumentInfo.Create(
+            DocumentId.CreateNewId(proj.Id),
+            "Store.cs",
+            filePath: @"C:\Repo\src\RankingProject\Store.cs",
+            loader: TextLoader.From(TextAndVersion.Create(
+                SourceText.From(code),
+                VersionStamp.Create())));
+
+        var solution = workspace.CurrentSolution
+            .AddProject(proj)
+            .AddDocument(doc);
+
+        var snapshot = new RoslynWorkspaceSnapshot(solution, @"C:\Repo\Solution.sln", 1);
+        var engine = new RoslynApiSearchEngine();
+
+        var results = await engine.SearchAsync(snapshot, new ApiSearchCriteria(
+            Patterns: new[] { "Order" },
+            Scope: "source"));
+
+        results.Should().NotBeEmpty();
+
+        // Exact Type Name (Tier 1) should be ranked first
+        results[0].Kind.Should().Be(Pmad.CSharpNav.Domain.SymbolKind.Class);
+        results[0].Name.Should().Be("MyStore.Order");
+
+        // Exact Member Name (Tier 2) should come after Tier 1
+        results[1].Kind.Should().Be(Pmad.CSharpNav.Domain.SymbolKind.Method);
+        results[1].Name.Should().Contain("OrderProcessor.Order");
+
+        var resultsList = results.ToList();
+
+        // PascalCase Word Match (Tier 4) e.g. CreateOrder
+        var createOrderIndex = resultsList.FindIndex(r => r.Name.Contains("CreateOrder"));
+        createOrderIndex.Should().BeGreaterThan(1);
+
+        // Substring match e.g. Border (Tier 5) should come after Tier 1
+        var borderIndex = resultsList.FindIndex(r => r.Name.Contains("Border"));
+        borderIndex.Should().BeGreaterThan(createOrderIndex);
+    }
+
+    [Fact]
+    public async Task RoslynReferenceFinder_FindDefinitions_Populates_EndLine()
+    {
+        using var workspace = new AdhocWorkspace();
+        var coreLibRef = MetadataReference.CreateFromFile(typeof(object).Assembly.Location);
+
+        var proj = ProjectInfo.Create(
+            ProjectId.CreateNewId(),
+            VersionStamp.Create(),
+            "DefProject",
+            "DefProject",
+            LanguageNames.CSharp,
+            filePath: @"C:\Repo\src\DefProject\DefProject.csproj",
+            metadataReferences: [coreLibRef]);
+
+        var code = """
+            namespace DefNamespace
+            {
+                public class Calculator
+                {
+                    public int Add(int a, int b)
+                    {
+                        return a + b;
+                    }
+                }
+            }
+            """;
+
+        var doc = DocumentInfo.Create(
+            DocumentId.CreateNewId(proj.Id),
+            "Calculator.cs",
+            filePath: @"C:\Repo\src\DefProject\Calculator.cs",
+            loader: TextLoader.From(TextAndVersion.Create(
+                SourceText.From(code),
+                VersionStamp.Create())));
+
+        var solution = workspace.CurrentSolution
+            .AddProject(proj)
+            .AddDocument(doc);
+
+        var snapshot = new RoslynWorkspaceSnapshot(solution, @"C:\Repo\Solution.sln", 1);
+        var finder = new RoslynReferenceFinder();
+        var symbolId = new SymbolIdentifier("DefProject", "DefNamespace", "Calculator", "int Add(int a, int b)", null);
+
+        var definitions = await finder.FindDefinitionsAsync(
+            snapshot,
+            symbolId,
+            new DefinitionSearchOptions());
+
+        definitions.Should().NotBeEmpty();
+        var def = definitions[0];
+        def.Line.Should().Be(5);
+        def.EndLine.Should().Be(5);
+    }
 }
 

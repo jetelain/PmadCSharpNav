@@ -25,7 +25,13 @@ public sealed class SearchApiHandler
             Kind: request.Kind,
             Access: request.Access,
             Framework: request.Framework,
-            Project: request.Project);
+            Project: request.Project,
+            Namespace: request.Namespace,
+            Assembly: request.Assembly,
+            IncludeObsolete: request.IncludeObsolete,
+            InheritsFrom: request.InheritsFrom,
+            ReturnsType: request.ReturnsType,
+            Patterns: request.Patterns);
 
         var allMatches = await _searchEngine.SearchAsync(snapshot, criteria, ct);
 
@@ -42,7 +48,13 @@ public sealed class SearchApiHandler
                 ContainingType: m.ContainingType,
                 Assembly: m.Assembly,
                 IsExternal: m.IsExternal,
-                Summary: m.Summary))
+                Summary: m.Summary,
+                IsObsolete: m.IsObsolete,
+                ObsoleteMessage: m.ObsoleteMessage,
+                File: m.File,
+                Line: m.Line,
+                EndLine: m.EndLine,
+                SymbolId: m.SymbolId))
             .ToList();
 
         var total = allMatches.Count;
@@ -51,7 +63,9 @@ public sealed class SearchApiHandler
 
         var queryDescription = !string.IsNullOrWhiteSpace(request.Pattern)
             ? request.Pattern
-            : (!string.IsNullOrWhiteSpace(request.Doc) ? $"doc:{request.Doc}" : "*");
+            : (request.Patterns != null && request.Patterns.Count > 0
+                ? string.Join(", ", request.Patterns)
+                : (!string.IsNullOrWhiteSpace(request.Doc) ? $"doc:{request.Doc}" : "*"));
 
         var effectiveScope = !string.IsNullOrWhiteSpace(request.Project)
             ? request.Project

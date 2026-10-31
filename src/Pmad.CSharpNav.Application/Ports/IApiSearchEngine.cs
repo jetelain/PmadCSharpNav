@@ -9,7 +9,13 @@ public sealed record ApiSearchCriteria(
     string? Kind = null,
     string Access = "all",
     string? Framework = null,
-    string? Project = null);
+    string? Project = null,
+    string? Namespace = null,
+    string? Assembly = null,
+    bool IncludeObsolete = false,
+    string? InheritsFrom = null,
+    string? ReturnsType = null,
+    IReadOnlyList<string>? Patterns = null);
 
 /// <summary>
 /// Port for searching APIs across solution sources and referenced assemblies.

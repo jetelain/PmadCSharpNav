@@ -96,7 +96,8 @@ public sealed class FindDefinitionHandler
                 IsMetadata: d.IsMetadata,
                 IsGenerated: d.IsGenerated,
                 Snippet: d.Snippet,
-                SymbolId: d.SymbolId))
+                SymbolId: d.SymbolId,
+                EndLine: d.EndLine))
             .ToList();
 
         var total = allDefinitions.Count;
