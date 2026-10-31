@@ -68,6 +68,7 @@ public sealed class CliCommandVerbTests
 
     [Theory]
     [InlineData("search MySymbol")]
+    [InlineData("search MySymbol --project Pmad.CSharpNav.Cli")]
     [InlineData("api MySymbol")]
     [InlineData("find MySymbol")]
     public void Search_Command_And_Aliases_Parse_Successfully(string commandLine)

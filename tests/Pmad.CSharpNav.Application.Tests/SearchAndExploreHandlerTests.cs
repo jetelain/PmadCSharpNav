@@ -36,6 +36,20 @@ public class SearchApiHandlerTests
         response.Truncated.Should().BeTrue();
         response.NextOffset.Should().Be(2);
     }
+
+    [Fact]
+    public async Task HandleAsync_WithProject_PassesProjectToSearchEngineAndSetsEffectiveScope()
+    {
+        var handler = new SearchApiHandler(_workspace, _searchEngine);
+
+        var response = await handler.HandleAsync(new SearchApiRequest(
+            Pattern: "*Command",
+            Project: "Pmad.CSharpNav.Cli"));
+
+        _searchEngine.LastCriteria.Should().NotBeNull();
+        _searchEngine.LastCriteria!.Project.Should().Be("Pmad.CSharpNav.Cli");
+        response.Scope.Should().Be("Pmad.CSharpNav.Cli");
+    }
 }
 
 public class ExploreTypeHandlerTests

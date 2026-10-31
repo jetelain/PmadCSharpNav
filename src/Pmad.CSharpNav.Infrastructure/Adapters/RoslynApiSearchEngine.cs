@@ -40,13 +40,19 @@ public sealed class RoslynApiSearchEngine : IApiSearchEngine
         var roslynSnapshot = (RoslynWorkspaceSnapshot)snapshot;
         var results = new List<ApiDefinition>();
 
+        var hasProjectFilter = !string.IsNullOrWhiteSpace(criteria.Project);
         var isAll = string.Equals(criteria.Scope, "all", StringComparison.OrdinalIgnoreCase);
         var isSourceOnly = string.Equals(criteria.Scope, "source", StringComparison.OrdinalIgnoreCase) ||
                            string.Equals(criteria.Scope, "solution", StringComparison.OrdinalIgnoreCase);
         var isDependenciesOnly = string.Equals(criteria.Scope, "dependencies", StringComparison.OrdinalIgnoreCase);
 
-        var searchSource = isAll || isSourceOnly || (!isDependenciesOnly);
-        var searchExternal = isAll || isDependenciesOnly || (!isSourceOnly);
+        var scopeMatchesSourceProject = !isAll && !isSourceOnly && !isDependenciesOnly &&
+                                        roslynSnapshot.Solution.Projects.Any(p => RoslynReferenceFinder.MatchesProject(p, criteria.Scope));
+
+        var searchSource = !isDependenciesOnly && (isAll || isSourceOnly || hasProjectFilter || scopeMatchesSourceProject);
+        var searchExternal = !hasProjectFilter
+            ? (isAll || isDependenciesOnly || (!isSourceOnly && !scopeMatchesSourceProject))
+            : isDependenciesOnly;
 
         Regex? patternRegex = null;
         if (!string.IsNullOrWhiteSpace(criteria.Pattern) && (criteria.Pattern.Contains('*') || criteria.Pattern.Contains('?')))
@@ -58,11 +64,26 @@ public sealed class RoslynApiSearchEngine : IApiSearchEngine
         // 1. Search source code declarations
         if (searchSource)
         {
-            foreach (var project in roslynSnapshot.Solution.Projects)
+            var sourceProjects = roslynSnapshot.Solution.Projects.ToList();
+            if (!string.IsNullOrWhiteSpace(criteria.Framework))
             {
-                if (!isAll && !isSourceOnly &&
-                    !string.Equals(project.Name, criteria.Scope, StringComparison.OrdinalIgnoreCase) &&
-                    !string.Equals(project.AssemblyName, criteria.Scope, StringComparison.OrdinalIgnoreCase))
+                var filtered = sourceProjects.Where(p =>
+                    p.Name.Contains(criteria.Framework, StringComparison.OrdinalIgnoreCase) ||
+                    (p.OutputFilePath != null && p.OutputFilePath.Contains(criteria.Framework, StringComparison.OrdinalIgnoreCase))).ToList();
+                if (filtered.Count > 0)
+                {
+                    sourceProjects = filtered;
+                }
+            }
+
+            foreach (var project in sourceProjects)
+            {
+                if (hasProjectFilter && !RoslynReferenceFinder.MatchesProject(project, criteria.Project!))
+                {
+                    continue;
+                }
+
+                if (!isAll && !isSourceOnly && !RoslynReferenceFinder.MatchesProject(project, criteria.Scope))
                 {
                     continue;
                 }
@@ -91,6 +112,11 @@ public sealed class RoslynApiSearchEngine : IApiSearchEngine
         if (searchExternal)
         {
             var projects = roslynSnapshot.Solution.Projects.ToList();
+            if (hasProjectFilter)
+            {
+                projects = projects.Where(p => RoslynReferenceFinder.MatchesProject(p, criteria.Project!)).ToList();
+            }
+
             if (!string.IsNullOrWhiteSpace(criteria.Framework))
             {
                 var filtered = projects.Where(p =>

@@ -321,7 +321,7 @@ public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder,
 
                 // Filter project if specified
                 if (!string.IsNullOrWhiteSpace(options.Project) &&
-                    !string.Equals(project.Name, options.Project, StringComparison.OrdinalIgnoreCase))
+                    !MatchesProject(project, options.Project))
                 {
                     continue;
                 }
@@ -534,6 +534,37 @@ public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder,
         return string.Join(Environment.NewLine, lines);
     }
 
+    internal static bool MatchesProject(Project project, string projectFilter)
+    {
+        if (string.Equals(project.Name, projectFilter, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(project.AssemblyName, projectFilter, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (!string.IsNullOrWhiteSpace(project.FilePath))
+        {
+            var fileNameWithoutExt = Path.GetFileNameWithoutExtension(project.FilePath);
+            var fileName = Path.GetFileName(project.FilePath);
+            if (string.Equals(fileNameWithoutExt, projectFilter, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(fileName, projectFilter, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        if (project.Name.StartsWith(projectFilter, StringComparison.OrdinalIgnoreCase))
+        {
+            var suffix = project.Name[projectFilter.Length..].TrimStart();
+            if (suffix.StartsWith('(') && suffix.EndsWith(')'))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static bool IsTestProject(Project project)
     {
         var name = project.Name;
@@ -661,7 +692,7 @@ public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder,
                 if (document != null)
                 {
                     if (!string.IsNullOrWhiteSpace(options.Project) &&
-                        !string.Equals(document.Project.Name, options.Project, StringComparison.OrdinalIgnoreCase))
+                        !MatchesProject(document.Project, options.Project))
                     {
                         continue;
                     }
@@ -806,7 +837,7 @@ public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder,
                     }
 
                     if (!string.IsNullOrWhiteSpace(options.Project) &&
-                        !string.Equals(document.Project.Name, options.Project, StringComparison.OrdinalIgnoreCase))
+                        !MatchesProject(document.Project, options.Project))
                     {
                         continue;
                     }

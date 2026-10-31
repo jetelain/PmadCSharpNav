@@ -169,6 +169,9 @@ csnav search "*Serializer"
 # Search in solution scope only
 csnav search "Nav*" --scope solution
 
+# Filter search to a specific project
+csnav search "*Command" --project Pmad.CSharpNav.Cli
+
 # Search within XML doc comments
 csnav search --doc "sha256" --format markdown
 ```
