@@ -8,7 +8,8 @@ public sealed record SearchApiRequest(
     string Access = "all", // "all", "public", "internal"
     string? Framework = null,
     int Limit = NavConstants.DefaultLimit,
-    int Offset = 0);
+    int Offset = 0,
+    string? Project = null);
 
 public sealed record ApiSearchResultDto(
     string Name,

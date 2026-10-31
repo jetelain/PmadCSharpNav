@@ -108,6 +108,9 @@ csnav search "*Repository" --format json
 # Search solution code only (fastest)
 csnav search "*Service" --scope solution --format json
 
+# Filter search to a specific project
+csnav search "*Command" --project "MyApp.Cli" --format json
+
 # Include external dependencies (NuGet & .NET BCL)
 csnav search "JsonSerializer*" --scope all --format json
 
@@ -120,6 +123,7 @@ csnav search --doc "calculates sha256" --format markdown
 
 **Key Options:**
 - `<pattern>`: Search pattern (e.g. `Order*`, `*Repository`, `Find*`).
+- `--project <name>`: Restrict search to a specific project.
 - `--scope <solution|all>`: `solution` for project sources, `all` to include external dependencies (default `solution`).
 - `--kind <type|class|interface|method|property|all>`: Filter by declaration kind.
 - `--access <public|internal|all>`: Minimum accessibility (default `public`).

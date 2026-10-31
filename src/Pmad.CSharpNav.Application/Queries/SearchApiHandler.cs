@@ -24,7 +24,8 @@ public sealed class SearchApiHandler
             Scope: request.Scope,
             Kind: request.Kind,
             Access: request.Access,
-            Framework: request.Framework);
+            Framework: request.Framework,
+            Project: request.Project);
 
         var allMatches = await _searchEngine.SearchAsync(snapshot, criteria, ct);
 
@@ -52,9 +53,13 @@ public sealed class SearchApiHandler
             ? request.Pattern
             : (!string.IsNullOrWhiteSpace(request.Doc) ? $"doc:{request.Doc}" : "*");
 
+        var effectiveScope = !string.IsNullOrWhiteSpace(request.Project)
+            ? request.Project
+            : request.Scope;
+
         return new SearchApiResponse(
             Query: queryDescription,
-            Scope: request.Scope,
+            Scope: effectiveScope,
             TotalMatches: total,
             Offset: offset,
             Limit: limit,

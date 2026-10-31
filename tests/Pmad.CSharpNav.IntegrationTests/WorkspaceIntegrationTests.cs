@@ -84,6 +84,52 @@ public sealed class WorkspaceIntegrationTests : IAsyncLifetime, IDisposable
     }
 
     [Fact]
+    public async Task SearchApi_WithProjectFilter_ScopesToSpecifiedProjectOnly()
+    {
+        var searchEngine = new RoslynApiSearchEngine();
+        var handler = new SearchApiHandler(_workspace, searchEngine);
+
+        var cliResponse = await handler.HandleAsync(new SearchApiRequest(
+            Pattern: "*Command",
+            Project: "Pmad.CSharpNav.Cli",
+            Limit: 50));
+
+        cliResponse.Should().NotBeNull();
+        cliResponse.Scope.Should().Be("Pmad.CSharpNav.Cli");
+        cliResponse.Results.Should().NotBeEmpty();
+        cliResponse.Results.Should().OnlyContain(r => r.Assembly == "Pmad.CSharpNav.Cli" && !r.IsExternal);
+        cliResponse.Results.Should().Contain(r => r.Name.Contains("SearchCommand", StringComparison.OrdinalIgnoreCase));
+
+        var contractsResponse = await handler.HandleAsync(new SearchApiRequest(
+            Pattern: "*Command",
+            Project: "Pmad.CSharpNav.Contracts",
+            Limit: 50));
+
+        contractsResponse.Results.Should().BeEmpty();
+
+        var infraDecompilerResponse = await handler.HandleAsync(new SearchApiRequest(
+            Pattern: "DecompilerException",
+            Scope: "ICSharpCode.Decompiler",
+            Project: "Pmad.CSharpNav.Infrastructure",
+            Kind: "class",
+            Limit: 10));
+
+        infraDecompilerResponse.Results.Should().Contain(r =>
+            r.Name.Contains("DecompilerException", StringComparison.OrdinalIgnoreCase) &&
+            r.Assembly == "ICSharpCode.Decompiler" &&
+            r.IsExternal);
+
+        var contractsDecompilerResponse = await handler.HandleAsync(new SearchApiRequest(
+            Pattern: "DecompilerException",
+            Scope: "ICSharpCode.Decompiler",
+            Project: "Pmad.CSharpNav.Contracts",
+            Kind: "class",
+            Limit: 10));
+
+        contractsDecompilerResponse.Results.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task SearchApi_Finds_External_Dependency_Referenced_In_Non_First_Project()
     {
         var searchEngine = new RoslynApiSearchEngine();

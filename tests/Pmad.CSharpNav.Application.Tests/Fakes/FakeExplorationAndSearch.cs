@@ -7,12 +7,16 @@ public sealed class FakeApiSearchEngine : IApiSearchEngine
 {
     public List<ApiDefinition> SearchResults { get; set; } = new();
     public string IndexState { get; set; } = "ready";
+    public ApiSearchCriteria? LastCriteria { get; private set; }
 
     public Task<IReadOnlyList<ApiDefinition>> SearchAsync(
         IWorkspaceSnapshot snapshot,
         ApiSearchCriteria criteria,
-        CancellationToken ct = default) =>
-        Task.FromResult<IReadOnlyList<ApiDefinition>>(SearchResults);
+        CancellationToken ct = default)
+    {
+        LastCriteria = criteria;
+        return Task.FromResult<IReadOnlyList<ApiDefinition>>(SearchResults);
+    }
 
     public string GetIndexState() => IndexState;
 }

@@ -12,6 +12,7 @@ public static class SearchCommand
         var patternArg = new Argument<string?>("pattern") { Description = "Symbol name or search pattern (wildcards * supported, e.g. *Repository)", Arity = ArgumentArity.ZeroOrOne };
         var docOption = new Option<string?>("--doc") { Description = "Full-text search across XML documentation comments (summary, param, returns)" };
         var scopeOption = new Option<string>("--scope") { Description = "Search scope: all (default), source, dependencies, or assembly name", DefaultValueFactory = _ => "all" };
+        var projectOption = new Option<string?>("--project") { Description = "Filter search results to a specific project name" };
         var kindOption = new Option<string>("--kind") { Description = "Filter by symbol kind: type, method, property, field, event, or all", DefaultValueFactory = _ => "all" };
         var accessOption = new Option<string>("--access") { Description = "Filter by accessibility: public (default), internal, or all", DefaultValueFactory = _ => "public" };
         var limitOption = new Option<int>("--limit") { Description = "Maximum number of results to return", DefaultValueFactory = _ => 50 };
@@ -24,6 +25,7 @@ public static class SearchCommand
         cmd.Add(patternArg);
         cmd.Add(docOption);
         cmd.Add(scopeOption);
+        cmd.Add(projectOption);
         cmd.Add(kindOption);
         cmd.Add(accessOption);
         cmd.Add(limitOption);
@@ -34,6 +36,7 @@ public static class SearchCommand
             var pattern = parseResult.GetValue(patternArg);
             var doc = parseResult.GetValue(docOption);
             var scope = parseResult.GetValue(scopeOption) ?? "all";
+            var project = parseResult.GetValue(projectOption);
             var kind = parseResult.GetValue(kindOption) ?? "all";
             var access = parseResult.GetValue(accessOption) ?? "public";
             var limit = parseResult.GetValue(limitOption);
@@ -63,7 +66,8 @@ public static class SearchCommand
                     Access: access,
                     Framework: framework,
                     Limit: limit,
-                    Offset: offset);
+                    Offset: offset,
+                    Project: project);
 
                 var response = await client.PostAsync<SearchApiRequest, SearchApiResponse>(
                     solutionPath, "/api/api-search", req, ct);

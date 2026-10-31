@@ -8,7 +8,8 @@ public sealed record ApiSearchCriteria(
     string Scope = "all", // "all", "source", "dependencies", or assembly name
     string? Kind = null,
     string Access = "all",
-    string? Framework = null);
+    string? Framework = null,
+    string? Project = null);
 
 /// <summary>
 /// Port for searching APIs across solution sources and referenced assemblies.
