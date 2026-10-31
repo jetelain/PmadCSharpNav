@@ -61,11 +61,25 @@ public sealed class SearchApiHandler
         var truncated = (offset + pagedResults.Count) < total;
         var nextOffset = truncated ? offset + pagedResults.Count : (int?)null;
 
-        var queryDescription = !string.IsNullOrWhiteSpace(request.Pattern)
-            ? request.Pattern
-            : (request.Patterns != null && request.Patterns.Count > 0
-                ? string.Join(", ", request.Patterns)
-                : (!string.IsNullOrWhiteSpace(request.Doc) ? $"doc:{request.Doc}" : "*"));
+        var queryTerms = new List<string>();
+        if (!string.IsNullOrWhiteSpace(request.Pattern))
+        {
+            queryTerms.Add(request.Pattern);
+        }
+        if (request.Patterns != null)
+        {
+            foreach (var p in request.Patterns)
+            {
+                if (!string.IsNullOrWhiteSpace(p) && !queryTerms.Contains(p, StringComparer.OrdinalIgnoreCase))
+                {
+                    queryTerms.Add(p);
+                }
+            }
+        }
+
+        var queryDescription = queryTerms.Count > 0
+            ? string.Join(", ", queryTerms)
+            : (!string.IsNullOrWhiteSpace(request.Doc) ? $"doc:{request.Doc}" : "*");
 
         var effectiveScope = !string.IsNullOrWhiteSpace(request.Project)
             ? request.Project

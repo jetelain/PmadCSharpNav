@@ -19,4 +19,5 @@ public sealed record ApiDefinition(
     string? File = null,
     int? Line = null,
     int? EndLine = null,
-    string? SymbolId = null);
+    string? SymbolId = null,
+    IReadOnlyList<string>? BaseTypes = null);

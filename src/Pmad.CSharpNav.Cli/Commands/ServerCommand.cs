@@ -75,11 +75,11 @@ public static class ServerCommand
         startCmd.SetAction(async (parseResult, ct) =>
         {
             var specifiedSolution = parseResult.GetValue(globals.SolutionOption);
-            var format = parseResult.GetValue(globals.FormatOption) ?? "markdown";
+            var format = parseResult.GetValue(globals.FormatOption) ?? GlobalOptions.GetDefaultFormat();
             try
             {
                 var solutionPath = NavDaemonClient.ResolveSolutionPath(specifiedSolution);
-                var info = await client.EnsureDaemonRunningAsync(solutionPath, ct);
+                var info = await client.EnsureStartedAsync(solutionPath, Console.Error, ct);
                 if (format.Equals("json", StringComparison.OrdinalIgnoreCase))
                 {
                     var payload = new ServerStartResponse(

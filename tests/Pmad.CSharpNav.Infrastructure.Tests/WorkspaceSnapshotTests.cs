@@ -1161,7 +1161,14 @@ public class WorkspaceSnapshotTests
         match.File.Should().Contain("UserService.cs");
         match.File.Should().NotContain("C:");
         match.Line.Should().Be(5);
-        match.EndLine.Should().Be(5);
+        match.EndLine.Should().Be(7);
+
+        var classResults = await engine.SearchAsync(snapshot, new ApiSearchCriteria(
+            Pattern: "UserService",
+            Scope: "source"));
+        classResults.Should().ContainSingle();
+        classResults[0].Line.Should().Be(3);
+        classResults[0].EndLine.Should().Be(8);
     }
 
     [Fact]
@@ -1297,7 +1304,136 @@ public class WorkspaceSnapshotTests
         definitions.Should().NotBeEmpty();
         var def = definitions[0];
         def.Line.Should().Be(5);
-        def.EndLine.Should().Be(5);
+        def.EndLine.Should().Be(8);
+    }
+
+    [Fact]
+    public async Task RoslynApiSearchEngine_SearchAsync_Handles_GenericMembers_Acronyms_Kind_InheritsFrom_And_ReturnsType()
+    {
+        using var workspace = new AdhocWorkspace();
+        var coreLibRef = MetadataReference.CreateFromFile(typeof(object).Assembly.Location);
+
+        var proj = ProjectInfo.Create(
+            ProjectId.CreateNewId(),
+            VersionStamp.Create(),
+            "AdvancedSearchProject",
+            "AdvancedSearchProject",
+            LanguageNames.CSharp,
+            filePath: @"C:\Repo\src\AdvancedSearchProject\AdvancedSearchProject.csproj",
+            metadataReferences: [coreLibRef]);
+
+        var code = """
+            using System;
+            using System.Threading.Tasks;
+
+            namespace MyDomain.Services
+            {
+                public interface IEntityRepository
+                {
+                }
+
+                public record OrderCreatedRecord(int OrderId);
+
+                public class Repository<T> : IEntityRepository
+                {
+                    public event EventHandler? ItemSaved;
+
+                    public Repository()
+                    {
+                    }
+
+                    public Task<OrderCreatedRecord> SaveAsync(T item) => Task.FromResult(new OrderCreatedRecord(1));
+
+                    public void ProcessWithParam(int count, OrderCreatedRecord recordParam)
+                    {
+                    }
+                }
+
+                public class XMLParser
+                {
+                }
+            }
+            """;
+
+        var doc = DocumentInfo.Create(
+            DocumentId.CreateNewId(proj.Id),
+            "Domain.cs",
+            filePath: @"C:\Repo\src\AdvancedSearchProject\Domain.cs",
+            loader: TextLoader.From(TextAndVersion.Create(
+                SourceText.From(code),
+                VersionStamp.Create())));
+
+        var solution = workspace.CurrentSolution
+            .AddProject(proj)
+            .AddDocument(doc);
+
+        var snapshot = new RoslynWorkspaceSnapshot(solution, @"C:\Repo\Solution.sln", 1);
+        var tempCacheDir = Path.Combine(Path.GetTempPath(), "csnav_cache_" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var engine = new RoslynApiSearchEngine(tempCacheDir);
+
+            // 1. Qualified suffix match on member of generic type (Repository<T>.SaveAsync matched via "Repository.SaveAsync")
+            var genericMemberMatches = await engine.SearchAsync(snapshot, new ApiSearchCriteria(
+                Pattern: "Repository.SaveAsync",
+                Scope: "source"));
+            genericMemberMatches.Should().ContainSingle(m => m.Name.Contains("SaveAsync"));
+
+            // 2. Wildcard qualified pattern "Repository.Save*"
+            var wildcardQualifiedMatches = await engine.SearchAsync(snapshot, new ApiSearchCriteria(
+                Pattern: "Repository.Save*",
+                Scope: "source"));
+            wildcardQualifiedMatches.Should().ContainSingle(m => m.Name.Contains("SaveAsync"));
+
+            // 3. Kind filter for "record", "event", "constructor"
+            var recordMatches = await engine.SearchAsync(snapshot, new ApiSearchCriteria(
+                Kind: "record",
+                Scope: "source"));
+            recordMatches.Should().ContainSingle(m => m.Name.Contains("OrderCreatedRecord"));
+
+            var eventMatches = await engine.SearchAsync(snapshot, new ApiSearchCriteria(
+                Kind: "event",
+                Scope: "source"));
+            eventMatches.Should().ContainSingle(m => m.Name.Contains("ItemSaved"));
+
+            var ctorMatches = await engine.SearchAsync(snapshot, new ApiSearchCriteria(
+                Kind: "constructor",
+                Scope: "source"));
+            ctorMatches.Should().Contain(m => m.Kind == Pmad.CSharpNav.Domain.SymbolKind.Constructor && m.Name.Contains("Repository"));
+
+            // 4. ReturnsType matches Task<OrderCreatedRecord> via "OrderCreatedRecord", and does NOT match parameter type in ProcessWithParam
+            var returnsMatches = await engine.SearchAsync(snapshot, new ApiSearchCriteria(
+                ReturnsType: "OrderCreatedRecord",
+                Scope: "source"));
+            returnsMatches.Should().ContainSingle(m => m.Name.Contains("SaveAsync"));
+            returnsMatches.Should().NotContain(m => m.Name.Contains("ProcessWithParam"));
+
+            // 5. InheritsFrom with Scope = "all" does NOT leak external BCL symbols that don't implement IEntityRepository
+            var inheritsAllScope = await engine.SearchAsync(snapshot, new ApiSearchCriteria(
+                InheritsFrom: "IEntityRepository",
+                Scope: "all"));
+            inheritsAllScope.Should().ContainSingle(m => m.Name.Contains("Repository"));
+            inheritsAllScope.Should().OnlyContain(m => !m.IsExternal);
+
+            // 6. PascalCase word boundary after acronym ("XMLParser" matches "Parser" at Tier 4 before substring matches)
+            var acronymMatches = await engine.SearchAsync(snapshot, new ApiSearchCriteria(
+                Pattern: "Parser",
+                Scope: "source"));
+            acronymMatches.Should().ContainSingle(m => m.Name.Contains("XMLParser"));
+
+            // 7. Namespace filter does not confuse ContainingType with Namespace
+            var wrongNsMatches = await engine.SearchAsync(snapshot, new ApiSearchCriteria(
+                Namespace: "MyDomain.Services.Repository",
+                Scope: "source"));
+            wrongNsMatches.Should().BeEmpty();
+        }
+        finally
+        {
+            if (Directory.Exists(tempCacheDir))
+            {
+                Directory.Delete(tempCacheDir, recursive: true);
+            }
+        }
     }
 }
 

@@ -46,7 +46,10 @@ public sealed class NavDaemonClient : IDisposable
             ?? Directory.GetFiles(dir, "*.csproj").FirstOrDefault();
     }
 
-    public async Task<DiscoveryInfo> EnsureDaemonRunningAsync(string solutionPath, CancellationToken ct = default)
+    public Task<DiscoveryInfo> EnsureDaemonRunningAsync(string solutionPath, CancellationToken ct = default)
+        => EnsureDaemonRunningAsync(solutionPath, Console.Error, ct);
+
+    public async Task<DiscoveryInfo> EnsureDaemonRunningAsync(string solutionPath, TextWriter? progress, CancellationToken ct = default)
     {
         var fullPath = Path.GetFullPath(solutionPath);
 
@@ -69,7 +72,10 @@ public sealed class NavDaemonClient : IDisposable
         {
             if (info.Version != NavConstants.CurrentContractVersion)
             {
-                await Console.Error.WriteLineAsync($"[csnav] Daemon contract version mismatch (expected {NavConstants.CurrentContractVersion}, found {info.Version}). Restarting daemon...");
+                if (progress != null)
+                {
+                    await progress.WriteLineAsync($"[csnav] Daemon contract version mismatch (expected {NavConstants.CurrentContractVersion}, found {info.Version}). Restarting daemon...");
+                }
                 await StopDaemonAsync(fullPath, ct);
                 info = null;
             }
@@ -82,7 +88,10 @@ public sealed class NavDaemonClient : IDisposable
         // Stale or dead daemon, clean up and start a new one
         NavDiscovery.DeleteDiscoveryFile(fullPath);
 
-        await Console.Error.WriteLineAsync($"[csnav] Starting background daemon for {Path.GetFileName(fullPath)}...");
+        if (progress != null)
+        {
+            await progress.WriteLineAsync($"[csnav] Starting background daemon for {Path.GetFileName(fullPath)}...");
+        }
         StartBackgroundServer(fullPath);
 
         // Poll health endpoint
@@ -94,7 +103,10 @@ public sealed class NavDaemonClient : IDisposable
             info = await NavDiscovery.ReadDiscoveryFileAsync(fullPath, ct);
             if (info != null && await PingHealthAsync(info, ct))
             {
-                await Console.Error.WriteLineAsync($"[csnav] Daemon ready on port {info.Port}.");
+                if (progress != null)
+                {
+                    await progress.WriteLineAsync($"[csnav] Daemon ready on port {info.Port}.");
+                }
                 return info;
             }
         }
@@ -103,16 +115,16 @@ public sealed class NavDaemonClient : IDisposable
     }
 
     public Task<DiscoveryInfo> EnsureStartedAsync(string solutionPath, CancellationToken ct = default)
-        => EnsureDaemonRunningAsync(solutionPath, ct);
+        => EnsureDaemonRunningAsync(solutionPath, Console.Error, ct);
 
     public Task<DiscoveryInfo> EnsureStartedAsync(string solutionPath, TextWriter? progress, CancellationToken ct = default)
-        => EnsureDaemonRunningAsync(solutionPath, ct);
+        => EnsureDaemonRunningAsync(solutionPath, progress, ct);
 
     public Task<DiscoveryInfo> EnsureStartedWithInfoAsync(string solutionPath, CancellationToken ct = default)
-        => EnsureDaemonRunningAsync(solutionPath, ct);
+        => EnsureDaemonRunningAsync(solutionPath, Console.Error, ct);
 
     public Task<DiscoveryInfo> EnsureStartedWithInfoAsync(string solutionPath, TextWriter? progress, CancellationToken ct = default)
-        => EnsureDaemonRunningAsync(solutionPath, ct);
+        => EnsureDaemonRunningAsync(solutionPath, progress, ct);
 
     private static async Task<IDisposable> AcquireSolutionLockAsync(string solutionPath, TimeSpan timeout, CancellationToken ct)
     {

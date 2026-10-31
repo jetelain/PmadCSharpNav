@@ -759,7 +759,7 @@ public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder,
                 var span = isMapped ? mapped : loc.GetLineSpan();
                 var line = span.StartLinePosition.Line + 1;
                 var col = span.StartLinePosition.Character + 1;
-                var endLine = span.EndLinePosition.Line + 1;
+                var endLine = GetDeclarationEndLine(targetSymbol, loc, span, isMapped);
 
                 SourceText sourceText;
                 if (isMapped)
@@ -998,6 +998,48 @@ public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder,
         }
 
         return resolvedSymbol;
+    }
+
+    internal static int GetDeclarationEndLine(ISymbol symbol, Location loc, FileLinePositionSpan identifierSpan, bool isMapped)
+    {
+        var endLine = identifierSpan.EndLinePosition.Line + 1;
+        var tree = loc.SourceTree;
+        if (tree == null)
+        {
+            return endLine;
+        }
+
+        var syntaxRef = symbol.DeclaringSyntaxReferences
+            .FirstOrDefault(r => r.SyntaxTree == tree && r.Span.Contains(loc.SourceSpan));
+        if (syntaxRef == null)
+        {
+            return endLine;
+        }
+
+        var span = syntaxRef.Span;
+        if (symbol is IFieldSymbol or IEventSymbol)
+        {
+            var node = syntaxRef.GetSyntax();
+            var fieldDecl = node.Parent?.Parent;
+            if (fieldDecl is Microsoft.CodeAnalysis.CSharp.Syntax.BaseFieldDeclarationSyntax)
+            {
+                span = fieldDecl.Span;
+            }
+        }
+
+        if (isMapped)
+        {
+            var mappedSyntaxSpan = tree.GetMappedLineSpan(span);
+            if (mappedSyntaxSpan.HasMappedPath &&
+                string.Equals(mappedSyntaxSpan.Path, identifierSpan.Path, StringComparison.OrdinalIgnoreCase))
+            {
+                return Math.Max(endLine, mappedSyntaxSpan.EndLinePosition.Line + 1);
+            }
+            return endLine;
+        }
+
+        var declLineSpan = tree.GetLineSpan(span);
+        return Math.Max(endLine, declLineSpan.EndLinePosition.Line + 1);
     }
 }
 

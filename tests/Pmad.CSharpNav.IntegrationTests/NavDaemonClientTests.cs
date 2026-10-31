@@ -71,6 +71,80 @@ public sealed class NavDaemonClientTests : IDisposable
     }
 
     [Fact]
+    public async Task ServerCommand_Start_FormatJson_OutputsStructuredDiscoveryPayload()
+    {
+        using var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
+
+        using var cts = new CancellationTokenSource();
+        var serverTask = Task.Run(async () =>
+        {
+            try
+            {
+                while (!cts.Token.IsCancellationRequested)
+                {
+                    using var tcpClient = await listener.AcceptTcpClientAsync(cts.Token);
+                    using var stream = tcpClient.GetStream();
+                    var buffer = new byte[1024];
+                    _ = await stream.ReadAsync(buffer, cts.Token);
+                    var responseBytes = System.Text.Encoding.UTF8.GetBytes(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 20\r\nConnection: close\r\n\r\n{\"status\":\"healthy\"}");
+                    await stream.WriteAsync(responseBytes, cts.Token);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        });
+
+        try
+        {
+            await NavDiscovery.WriteDiscoveryFileAsync(_solutionPath, port, "secret_bearer_token_123");
+
+            using var client = new NavDaemonClient();
+            using var progress = new StringWriter();
+            var info = await client.EnsureStartedAsync(_solutionPath, progress);
+            info.Port.Should().Be(port);
+            info.Token.Should().Be("secret_bearer_token_123");
+
+            var globals = new Pmad.CSharpNav.Cli.Commands.GlobalOptions();
+            var root = new System.CommandLine.RootCommand();
+            globals.AddTo(root);
+            root.Add(Pmad.CSharpNav.Cli.Commands.ServerCommand.Create(globals, client));
+
+            var originalOut = Console.Out;
+            using var stdout = new StringWriter();
+            try
+            {
+                Console.SetOut(stdout);
+                var parseResult = root.Parse(["server", "start", "--solution", _solutionPath, "--format", "json"]);
+                var exitCode = await parseResult.InvokeAsync();
+                exitCode.Should().Be(0);
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+            }
+
+            var jsonOutput = stdout.ToString().Trim();
+            var parsed = NavJsonSerializer.Deserialize<ServerStartResponse>(jsonOutput);
+            parsed.Should().NotBeNull();
+            parsed!.Port.Should().Be(port);
+            parsed.Pid.Should().Be(Environment.ProcessId);
+            parsed.Token.Should().Be("secret_bearer_token_123");
+            parsed.Url.Should().Be($"http://127.0.0.1:{port}");
+            parsed.SolutionPath.Should().Be(Path.GetFullPath(_solutionPath));
+        }
+        finally
+        {
+            cts.Cancel();
+            listener.Stop();
+            await serverTask;
+        }
+    }
+
+    [Fact]
     public void WindowsProcessLauncher_OnWindows_CanSpawnProcessViaWmi()
     {
         if (!OperatingSystem.IsWindows())
