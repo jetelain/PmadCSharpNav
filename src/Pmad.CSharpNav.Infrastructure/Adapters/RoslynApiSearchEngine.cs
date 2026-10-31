@@ -49,10 +49,10 @@ public sealed class RoslynApiSearchEngine : IApiSearchEngine
         var scopeMatchesSourceProject = !isAll && !isSourceOnly && !isDependenciesOnly &&
                                         roslynSnapshot.Solution.Projects.Any(p => RoslynReferenceFinder.MatchesProject(p, criteria.Scope));
 
-        var searchSource = !isDependenciesOnly && (isAll || isSourceOnly || hasProjectFilter || scopeMatchesSourceProject);
+        var searchSource = !isDependenciesOnly && (isAll || isSourceOnly || scopeMatchesSourceProject);
         var searchExternal = !hasProjectFilter
             ? (isAll || isDependenciesOnly || (!isSourceOnly && !scopeMatchesSourceProject))
-            : isDependenciesOnly;
+            : (isDependenciesOnly || (!isAll && !isSourceOnly && !scopeMatchesSourceProject));
 
         Regex? patternRegex = null;
         if (!string.IsNullOrWhiteSpace(criteria.Pattern) && (criteria.Pattern.Contains('*') || criteria.Pattern.Contains('?')))
@@ -65,6 +65,16 @@ public sealed class RoslynApiSearchEngine : IApiSearchEngine
         if (searchSource)
         {
             var sourceProjects = roslynSnapshot.Solution.Projects.ToList();
+            if (hasProjectFilter)
+            {
+                sourceProjects = sourceProjects.Where(p => RoslynReferenceFinder.MatchesProject(p, criteria.Project!)).ToList();
+            }
+
+            if (!isAll && !isSourceOnly)
+            {
+                sourceProjects = sourceProjects.Where(p => RoslynReferenceFinder.MatchesProject(p, criteria.Scope)).ToList();
+            }
+
             if (!string.IsNullOrWhiteSpace(criteria.Framework))
             {
                 var filtered = sourceProjects.Where(p =>
@@ -78,16 +88,6 @@ public sealed class RoslynApiSearchEngine : IApiSearchEngine
 
             foreach (var project in sourceProjects)
             {
-                if (hasProjectFilter && !RoslynReferenceFinder.MatchesProject(project, criteria.Project!))
-                {
-                    continue;
-                }
-
-                if (!isAll && !isSourceOnly && !RoslynReferenceFinder.MatchesProject(project, criteria.Scope))
-                {
-                    continue;
-                }
-
                 var declarations = await SymbolFinder.FindSourceDeclarationsAsync(
                     project,
                     name => MatchesPattern(name, criteria.Pattern, patternRegex),

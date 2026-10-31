@@ -106,6 +106,27 @@ public sealed class WorkspaceIntegrationTests : IAsyncLifetime, IDisposable
             Limit: 50));
 
         contractsResponse.Results.Should().BeEmpty();
+
+        var infraDecompilerResponse = await handler.HandleAsync(new SearchApiRequest(
+            Pattern: "DecompilerException",
+            Scope: "ICSharpCode.Decompiler",
+            Project: "Pmad.CSharpNav.Infrastructure",
+            Kind: "class",
+            Limit: 10));
+
+        infraDecompilerResponse.Results.Should().Contain(r =>
+            r.Name.Contains("DecompilerException", StringComparison.OrdinalIgnoreCase) &&
+            r.Assembly == "ICSharpCode.Decompiler" &&
+            r.IsExternal);
+
+        var contractsDecompilerResponse = await handler.HandleAsync(new SearchApiRequest(
+            Pattern: "DecompilerException",
+            Scope: "ICSharpCode.Decompiler",
+            Project: "Pmad.CSharpNav.Contracts",
+            Kind: "class",
+            Limit: 10));
+
+        contractsDecompilerResponse.Results.Should().BeEmpty();
     }
 
     [Fact]

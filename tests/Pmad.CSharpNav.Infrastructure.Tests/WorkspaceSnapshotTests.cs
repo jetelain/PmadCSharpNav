@@ -913,5 +913,197 @@ public class WorkspaceSnapshotTests
         implRef.Should().NotBeNull();
         implRef!.Snippet.Should().Contain("ServiceImpl : IService");
     }
+
+    [Fact]
+    public async Task RoslynApiSearchEngine_SearchAsync_WithProjectAndExternalAssemblyScope_SearchesProjectReferences()
+    {
+        using var workspace = new AdhocWorkspace();
+        var coreLibRef = MetadataReference.CreateFromFile(typeof(object).Assembly.Location);
+        var extraAsm = typeof(System.Xml.Linq.XElement).Assembly;
+        var extraAsmRef = MetadataReference.CreateFromFile(extraAsm.Location);
+        var extraAsmName = extraAsm.GetName().Name!;
+
+        var projA = ProjectInfo.Create(
+            ProjectId.CreateNewId(),
+            VersionStamp.Create(),
+            "ProjectA",
+            "ProjectA",
+            LanguageNames.CSharp,
+            metadataReferences: [coreLibRef, extraAsmRef]);
+
+        var projB = ProjectInfo.Create(
+            ProjectId.CreateNewId(),
+            VersionStamp.Create(),
+            "ProjectB",
+            "ProjectB",
+            LanguageNames.CSharp,
+            metadataReferences: [coreLibRef]);
+
+        var solution = workspace.CurrentSolution
+            .AddProject(projA)
+            .AddProject(projB);
+
+        var snapshot = new RoslynWorkspaceSnapshot(solution, @"C:\Repo\Solution.slnx", 1);
+        var tempCacheDir = Path.Combine(Path.GetTempPath(), "csnav_cache_" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var engine = new RoslynApiSearchEngine(tempCacheDir);
+
+            var matchesInA = await engine.SearchAsync(snapshot, new ApiSearchCriteria(
+                Pattern: "XElement",
+                Scope: extraAsmName,
+                Kind: "class",
+                Project: "ProjectA"));
+
+            matchesInA.Should().Contain(m => m.Assembly == extraAsmName && m.IsExternal);
+
+            var matchesInB = await engine.SearchAsync(snapshot, new ApiSearchCriteria(
+                Pattern: "XElement",
+                Scope: extraAsmName,
+                Kind: "class",
+                Project: "ProjectB"));
+
+            matchesInB.Should().BeEmpty();
+        }
+        finally
+        {
+            if (Directory.Exists(tempCacheDir))
+            {
+                Directory.Delete(tempCacheDir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task RoslynApiSearchEngine_SearchAsync_WithProjectAndFrameworkFilter_FiltersProjectBeforeFrameworkFallback()
+    {
+        using var workspace = new AdhocWorkspace();
+        var coreLibRef = MetadataReference.CreateFromFile(typeof(object).Assembly.Location);
+
+        var projA = ProjectInfo.Create(
+            ProjectId.CreateNewId(),
+            VersionStamp.Create(),
+            "ProjectA (net10.0)",
+            "ProjectA",
+            LanguageNames.CSharp,
+            filePath: @"C:\Repo\src\ProjectA\ProjectA.csproj",
+            metadataReferences: [coreLibRef]);
+
+        var projB = ProjectInfo.Create(
+            ProjectId.CreateNewId(),
+            VersionStamp.Create(),
+            "ProjectB",
+            "ProjectB",
+            LanguageNames.CSharp,
+            filePath: @"C:\Repo\src\ProjectB\ProjectB.csproj",
+            metadataReferences: [coreLibRef]);
+
+        var docA = DocumentInfo.Create(
+            DocumentId.CreateNewId(projA.Id),
+            "ClassA.cs",
+            loader: TextLoader.From(TextAndVersion.Create(
+                SourceText.From("public class ClassA {}"),
+                VersionStamp.Create())));
+
+        var docB = DocumentInfo.Create(
+            DocumentId.CreateNewId(projB.Id),
+            "ClassB.cs",
+            loader: TextLoader.From(TextAndVersion.Create(
+                SourceText.From("public class ClassB {}"),
+                VersionStamp.Create())));
+
+        var solution = workspace.CurrentSolution
+            .AddProject(projA)
+            .AddProject(projB)
+            .AddDocument(docA)
+            .AddDocument(docB);
+
+        var snapshot = new RoslynWorkspaceSnapshot(solution, @"C:\Repo\Solution.slnx", 1);
+        var engine = new RoslynApiSearchEngine();
+
+        // ProjectB does not have "net10.0" in its name/output path, while ProjectA does;
+        // filtering to ProjectB first should preserve ProjectB via the framework fallback.
+        var matchesB = await engine.SearchAsync(snapshot, new ApiSearchCriteria(
+            Pattern: "Class*",
+            Project: "src/ProjectB/ProjectB.csproj",
+            Framework: "net10.0"));
+
+        matchesB.Should().ContainSingle(m => m.Name.Contains("ClassB"));
+
+        // Multi-targeted ProjectA (net10.0) should match both "ProjectA" and "ProjectA.csproj"
+        var matchesA = await engine.SearchAsync(snapshot, new ApiSearchCriteria(
+            Pattern: "Class*",
+            Project: "ProjectA.csproj"));
+
+        matchesA.Should().ContainSingle(m => m.Name.Contains("ClassA"));
+    }
+
+    [Fact]
+    public async Task RoslynReferenceFinder_FindReferences_IncludeImplementations_RespectsProjectFilter()
+    {
+        using var workspace = new AdhocWorkspace();
+        var coreLibRef = MetadataReference.CreateFromFile(typeof(object).Assembly.Location);
+
+        var projAId = ProjectId.CreateNewId();
+        var projBId = ProjectId.CreateNewId();
+
+        var projA = ProjectInfo.Create(
+            projAId,
+            VersionStamp.Create(),
+            "ProjectA",
+            "ProjectA",
+            LanguageNames.CSharp,
+            filePath: @"C:\Repo\ProjectA\ProjectA.csproj",
+            metadataReferences: [coreLibRef]);
+
+        var projB = ProjectInfo.Create(
+            projBId,
+            VersionStamp.Create(),
+            "ProjectB",
+            "ProjectB",
+            LanguageNames.CSharp,
+            filePath: @"C:\Repo\ProjectB\ProjectB.csproj",
+            projectReferences: [new ProjectReference(projAId)],
+            metadataReferences: [coreLibRef]);
+
+        var docA = DocumentInfo.Create(
+            DocumentId.CreateNewId(projAId),
+            "ServiceA.cs",
+            filePath: @"C:\Repo\ProjectA\ServiceA.cs",
+            loader: TextLoader.From(TextAndVersion.Create(
+                SourceText.From("""
+                    public interface ISharedService { void Run(); }
+                    public class ServiceImplA : ISharedService { public void Run() {} }
+                    """),
+                VersionStamp.Create())));
+
+        var docB = DocumentInfo.Create(
+            DocumentId.CreateNewId(projBId),
+            "ServiceB.cs",
+            filePath: @"C:\Repo\ProjectB\ServiceB.cs",
+            loader: TextLoader.From(TextAndVersion.Create(
+                SourceText.From("""
+                    public class ServiceImplB : ISharedService { public void Run() {} }
+                    """),
+                VersionStamp.Create())));
+
+        var solution = workspace.CurrentSolution
+            .AddProject(projA)
+            .AddProject(projB)
+            .AddDocument(docA)
+            .AddDocument(docB);
+
+        var snapshot = new RoslynWorkspaceSnapshot(solution, @"C:\Repo\Solution.slnx", 1);
+        var finder = new RoslynReferenceFinder();
+        var target = new SymbolIdentifier("ProjectA", null, "ISharedService", null, null);
+
+        var refsInA = await finder.FindReferencesAsync(
+            snapshot,
+            target,
+            new ReferenceSearchOptions(Project: "ProjectA", IncludeImplementations: true));
+
+        refsInA.Should().NotBeEmpty();
+        refsInA.Should().OnlyContain(r => r.File.Contains("ProjectA", StringComparison.OrdinalIgnoreCase));
+    }
 }
 
