@@ -224,7 +224,7 @@ public sealed class RoslynSolutionWorkspace : ISolutionWorkspace, IDisposable
                     isStale: false);
                 Volatile.Write(ref _currentSnapshot, restored);
             }
-            _state = "ready";
+            _state = current != null ? "ready" : "unhealthy";
             throw;
         }
         finally

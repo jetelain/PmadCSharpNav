@@ -216,7 +216,7 @@ csnav decompile --assembly "System.Text.Json" --type "System.Text.Json.JsonSeria
 - `--member <name>`: Specific member name to decompile instead of the entire type (optional).
 - `--assembly <name>`: External assembly name (optional).
 - `--symbol <docId-or-name>`: Qualified symbol name or Doc-ID (`T:...`, `M:...`, `P:...`, `F:...`, `E:...`).
-- `--file <path> --line <int> --column <int>`: Resolve external symbol at a source call site and decompile it.
+- `--file <path> --line <int> [--column <int>]`: Resolve external symbol at a source call site and decompile it.
 
 ---
 

@@ -10,4 +10,5 @@ public sealed record ReferenceLocation(
     string Snippet,
     string? ContainingMember,
     ReferenceKind Kind,
-    bool IsGenerated = false);
+    bool IsGenerated = false,
+    string? ContainingType = null);

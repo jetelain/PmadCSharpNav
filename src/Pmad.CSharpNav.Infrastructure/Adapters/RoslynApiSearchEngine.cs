@@ -549,7 +549,12 @@ public sealed class RoslynApiSearchEngine : IApiSearchEngine
 
     private static string CleanSignatureOrName(string name)
     {
-        var clean = StripParameters(name);
+        var clean = name.Trim();
+        if (clean.Length > 2 && clean[1] == ':' && char.IsLetter(clean[0]))
+        {
+            clean = clean[2..].Trim();
+        }
+        clean = StripParameters(clean);
         if (clean.Contains('<'))
         {
             clean = StripGenericArguments(clean);

@@ -22,7 +22,7 @@ public sealed class DecompileMemberHandler
         {
             snapshot = await _workspace.GetCurrentSnapshotAsync(ct);
         }
-        catch when (string.IsNullOrWhiteSpace(request.File))
+        catch (Exception) when (string.IsNullOrWhiteSpace(request.File) && !ct.IsCancellationRequested)
         {
             // Allow standalone decompilation of external BCL / runtime assemblies even when the workspace is unavailable
         }

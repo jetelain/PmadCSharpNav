@@ -405,12 +405,38 @@ public sealed class SkillCliSmokeMatrixTests : IAsyncLifetime, IDisposable
         var eventRefs = await refHandler.HandleAsync(new FindReferencesRequest(Symbol: "E:SmokeApp.OrderService.OrderProcessed"));
         eventRefs.TotalReferences.Should().Be(1);
 
-        // 6. Decompile with T: and M: Doc-IDs
+        // 6. Decompile with T:, M:, P:, constructor (#ctor / ..ctor), generic method (``1), and unprefixed type
         var decompileType = await decompileHandler.HandleAsync(new DecompileRequest(Symbol: "T:System.Uri"));
         decompileType.Source.Should().Contain("class Uri");
 
+        var decompileUnprefixedType = await decompileHandler.HandleAsync(new DecompileRequest(Symbol: "System.Uri"));
+        decompileUnprefixedType.Source.Should().Contain("class Uri");
+
         var decompileMember = await decompileHandler.HandleAsync(new DecompileRequest(Symbol: "P:System.Uri.IsLoopback"));
         decompileMember.Source.Should().Contain("IsLoopback");
+
+        var decompileGenericMethod = await decompileHandler.HandleAsync(new DecompileRequest(Symbol: "M:System.Array.Empty``1"));
+        decompileGenericMethod.Source.Should().Contain("Empty");
+
+        var decompileCtorDocId = await decompileHandler.HandleAsync(new DecompileRequest(Symbol: "M:System.Uri.#ctor(System.String)"));
+        decompileCtorDocId.Source.Should().Contain("Uri(");
+
+        var decompileCtorDotDot = await decompileHandler.HandleAsync(new DecompileRequest(Symbol: "System.Uri..ctor"));
+        decompileCtorDotDot.Source.Should().Contain("Uri(");
+
+        // 7. Partial Doc-IDs (simple type T:OrderService without namespace, M: without parameter list) & Delegate kind
+        var partialTypeDef = await defHandler.HandleAsync(new FindDefinitionRequest(Symbol: "T:OrderService"));
+        partialTypeDef.TotalDefinitions.Should().Be(1);
+        partialTypeDef.Definitions[0].SymbolId.Should().Be("T:SmokeApp.OrderService");
+
+        var partialMethodDef = await defHandler.HandleAsync(new FindDefinitionRequest(Symbol: "M:SmokeApp.OrderService.ProcessOrder"));
+        partialMethodDef.TotalDefinitions.Should().Be(1);
+        partialMethodDef.Definitions[0].SymbolId.Should().Be("M:SmokeApp.OrderService.ProcessOrder(System.Int32)");
+
+        var delegateDef = await defHandler.HandleAsync(new FindDefinitionRequest(Symbol: "T:SmokeApp.OrderAuditHandler"));
+        delegateDef.TotalDefinitions.Should().Be(1);
+        delegateDef.Target.Kind.Should().Be("Delegate");
+        delegateDef.Definitions[0].Kind.Should().Be("Delegate");
     }
 
     [Fact]
@@ -455,6 +481,8 @@ public sealed class SkillCliSmokeMatrixTests : IAsyncLifetime, IDisposable
 
         var refsAll = await refHandler.HandleAsync(new FindReferencesRequest(Symbol: "M:SmokeApp.OrderService.ProcessOrder(System.Int32)", ExcludeTests: false));
         refsAll.TotalReferences.Should().Be(1);
+        refsAll.References[0].ContainingType.Should().Be("SmokeApp.Tests.FakeOrderRepository");
+        refsAll.References[0].ContainingMember.Should().Be("SaveOrder");
 
         var refsNoTests = await refHandler.HandleAsync(new FindReferencesRequest(Symbol: "M:SmokeApp.OrderService.ProcessOrder(System.Int32)", ExcludeTests: true));
         refsNoTests.TotalReferences.Should().Be(0);
@@ -497,6 +525,12 @@ public sealed class SkillCliSmokeMatrixTests : IAsyncLifetime, IDisposable
         status.State.Should().Be("unhealthy");
         status.ProjectCount.Should().Be(0);
 
+        // Verify failed reload on an unhealthy workspace keeps State as "unhealthy" (not "ready" or "loading")
+        var reloadAct = () => unhealthyWorkspace.ReloadSolutionAsync();
+        await reloadAct.Should().ThrowAsync<NotSupportedException>();
+        var statusAfterReload = await unhealthyWorkspace.GetStatusAsync();
+        statusAfterReload.State.Should().Be("unhealthy");
+
         // Verify decompile still works standalone even when workspace is unhealthy and has 0 projects
         var decompileHandler = new DecompileMemberHandler(unhealthyWorkspace, _decompiler);
         var decompiled = await decompileHandler.HandleAsync(new DecompileRequest(
@@ -506,6 +540,81 @@ public sealed class SkillCliSmokeMatrixTests : IAsyncLifetime, IDisposable
         decompiled.Should().NotBeNull();
         decompiled.Type.Should().Be("System.Uri");
         decompiled.Source.Should().Contain("IsLoopback");
+
+        // Verify standalone decompile also resolves non-System.Runtime BCL assemblies (e.g. System.Linq, System.IO.Compression)
+        var decompiledLinq = await decompileHandler.HandleAsync(new DecompileRequest(
+            Type: "System.Linq.Enumerable",
+            Member: "Empty"));
+        decompiledLinq.Should().NotBeNull();
+        decompiledLinq.Source.Should().Contain("Empty");
+
+        var decompiledZip = await decompileHandler.HandleAsync(new DecompileRequest(
+            Type: "System.IO.Compression.ZipArchive"));
+        decompiledZip.Should().NotBeNull();
+        decompiledZip.Source.Should().Contain("class ZipArchive");
+    }
+
+    [Fact]
+    public async Task LocationBasedNavigation_FieldDeclarations_InferredVariableTypes_NestedGenerics_And_DecompileAtLine_Work()
+    {
+        var defHandler = new FindDefinitionHandler(_workspace, _referenceFinder);
+        var exploreHandler = new ExploreTypeHandler(_workspace, _typeExplorer);
+        var decompileHandler = new DecompileMemberHandler(_workspace, _decompiler);
+
+        var lines = await File.ReadAllLinesAsync(_orderServicePath);
+        int FindLine1Based(string substring)
+        {
+            for (int i = 0; i < lines.Length; i++)
+            {
+                if (lines[i].Contains(substring, StringComparison.Ordinal))
+                {
+                    return i + 1;
+                }
+            }
+            throw new InvalidOperationException($"Line containing '{substring}' not found.");
+        }
+
+        // 1. Definition at column=1 on a field declaration resolves the field itself, not the enclosing class
+        var fieldLine = FindLine1Based("public readonly IOrderRepository _repository;");
+        var fieldDefAtCol1 = await defHandler.HandleAsync(new FindDefinitionRequest(
+            File: _orderServicePath,
+            Line: fieldLine));
+        fieldDefAtCol1.Target.Kind.Should().Be("Field");
+        fieldDefAtCol1.Definitions[0].SymbolId.Should().Be("F:SmokeApp.OrderService._repository");
+
+        // 2. Inspect at local variable declaration (`var order = _repository.GetOrder(id);`) inspects inferred type OrderRecord
+        var localVarLine = FindLine1Based("var order = _repository.GetOrder(id);");
+        var localVarCol = lines[localVarLine - 1].IndexOf("order", StringComparison.Ordinal) + 1;
+        var inspectLocalVar = await exploreHandler.HandleAsync(new ExploreTypeRequest(
+            File: _orderServicePath,
+            Line: localVarLine,
+            Column: localVarCol,
+            NoInherited: true));
+        inspectLocalVar.Type.FullName.Should().Be("SmokeApp.OrderRecord");
+
+        // 3. Inspect nested generic type name (e.g. Dictionary<string, KeyValuePair<int, string>>)
+        RoslynTypeExplorer.NormalizeTypeNameForMetadata("System.Collections.Generic.Dictionary<string, System.Collections.Generic.KeyValuePair<int, string>>")
+            .Should().Be("System.Collections.Generic.Dictionary`2");
+        var inspectNestedGeneric = await exploreHandler.HandleAsync(new ExploreTypeRequest(
+            Type: "System.Collections.Generic.Dictionary<string, System.Collections.Generic.KeyValuePair<int, string>>",
+            NoInherited: true));
+        inspectNestedGeneric.Type.Name.Should().Be("Dictionary");
+
+        // 4. Decompile at source line (`OrderProcessed?.Invoke(this, EventArgs.Empty);`) with and without --column
+        var eventArgsLine = FindLine1Based("EventArgs.Empty");
+        var eventArgsCol = lines[eventArgsLine - 1].IndexOf("EventArgs", StringComparison.Ordinal) + 1;
+        var decompileAtCol = await decompileHandler.HandleAsync(new DecompileRequest(
+            File: _orderServicePath,
+            Line: eventArgsLine,
+            Column: eventArgsCol));
+        decompileAtCol.Should().NotBeNull();
+        decompileAtCol.Type.Should().Be("System.EventArgs");
+
+        var decompileAtLineNoCol = await decompileHandler.HandleAsync(new DecompileRequest(
+            File: _orderServicePath,
+            Line: eventArgsLine));
+        decompileAtLineNoCol.Should().NotBeNull();
+        decompileAtLineNoCol.Source.Should().NotBeNullOrWhiteSpace();
     }
 
     [Fact]
@@ -556,17 +665,27 @@ public sealed class SkillCliSmokeMatrixTests : IAsyncLifetime, IDisposable
             parsedStatus!.State.Should().Be("ready");
             parsedStatus.ProjectCount.Should().Be(2);
 
-            // 3. server reload
+            // 3. server reload (text and --format json)
             var (reloadExit, reloadStdout, _) = await RunCliAsync(
                 ["server", "reload", "--solution", _slnPath]);
             reloadExit.Should().Be(0);
             reloadStdout.Should().Contain("reloaded successfully");
+
+            var (reloadJsonExit, reloadJsonStdout, _) = await RunCliAsync(
+                ["server", "reload", "--solution", _slnPath, "--format", "json"]);
+            reloadJsonExit.Should().Be(0);
+            reloadJsonStdout.Should().Contain("\"status\":\"reloaded\"");
 
             // 4. server stop
             var (stopExit, stopStdout, _) = await RunCliAsync(
                 ["server", "stop", "--solution", _slnPath]);
             stopExit.Should().Be(0);
             stopStdout.Should().Contain("Server stopped");
+
+            var (stopJsonExit, stopJsonStdout, _) = await RunCliAsync(
+                ["server", "stop", "--solution", _slnPath, "--format", "json"]);
+            stopJsonExit.Should().Be(0);
+            stopJsonStdout.Should().Contain("\"status\":\"not_running\"");
 
             // 5. Verify status after stop reports stopped
             var (stoppedStatusExit, stoppedStatusStdout, _) = await RunCliAsync(

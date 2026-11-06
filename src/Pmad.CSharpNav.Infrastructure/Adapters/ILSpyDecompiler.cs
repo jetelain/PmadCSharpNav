@@ -33,11 +33,14 @@ public sealed class ILSpyDecompiler : IAssemblyDecompiler
         string? assemblyPath = null;
         string? targetTypeName = StripDocIdPrefix(criteria.Type);
         string? targetMemberName = criteria.Member;
+        string? fallbackTypeFromSymbol = null;
+        string? fallbackMemberFromSymbol = null;
 
-        // If queried by source code position: file, line, column
-        if (!string.IsNullOrWhiteSpace(criteria.File) && criteria.Line.HasValue && criteria.Column.HasValue)
+        // If queried by source code position: file, line, [column]
+        if (!string.IsNullOrWhiteSpace(criteria.File) && criteria.Line.HasValue)
         {
             if (roslynSnapshot == null) return null;
+            var col = criteria.Column ?? 1;
             var docId = roslynSnapshot.FindDocumentId(criteria.File);
             if (docId != null)
             {
@@ -55,27 +58,81 @@ public sealed class ILSpyDecompiler : IAssemblyDecompiler
                         return null;
                     }
                     var textLine = sourceText.Lines[criteria.Line.Value - 1];
-                    var pos = textLine.Start + Math.Clamp(criteria.Column.Value - 1, 0, textLine.Span.Length);
+                    var pos = textLine.Start + Math.Clamp(col - 1, 0, textLine.Span.Length);
                     var semModel = await doc.GetSemanticModelAsync(ct);
                     var root = await doc.GetSyntaxRootAsync(ct);
-                    var token = root?.FindToken(pos);
-                    var symbol = semModel?.GetSymbolInfo(token?.Parent ?? root!, ct).Symbol;
-
-                    if (symbol != null)
+                    if (semModel != null && root != null)
                     {
-                        var containingType = symbol.ContainingType ?? (symbol as INamedTypeSymbol);
-                        if (containingType != null)
+                        var token = root.FindToken(pos);
+                        var node = token.Parent;
+                        var symbol = node != null ? (semModel.GetSymbolInfo(node, ct).Symbol ?? semModel.GetDeclaredSymbol(node, ct)) : null;
+
+                        if (symbol == null && node != null)
                         {
-                            targetTypeName = containingType.ToDisplayString();
-                        }
-                        if (symbol is not INamedTypeSymbol)
-                        {
-                            targetMemberName = symbol.Name;
+                            var parent = node.Parent;
+                            while (parent != null && symbol == null)
+                            {
+                                if (parent is Microsoft.CodeAnalysis.CSharp.Syntax.MemberDeclarationSyntax or Microsoft.CodeAnalysis.CSharp.Syntax.BaseTypeDeclarationSyntax)
+                                {
+                                    break;
+                                }
+                                symbol = semModel.GetSymbolInfo(parent, ct).Symbol ?? semModel.GetDeclaredSymbol(parent, ct);
+                                parent = parent.Parent;
+                            }
                         }
 
-                        if (compilation != null)
+                        if (symbol == null || (!criteria.Column.HasValue && symbol.Locations.Any(l => l.IsInSource)))
                         {
-                            assemblyPath = ResolveAssemblyPath(compilation, symbol.ContainingAssembly);
+                            foreach (var tok in root.DescendantTokens(textLine.Span))
+                            {
+                                if (tok.Parent == null) continue;
+                                var cand = semModel.GetSymbolInfo(tok.Parent, ct).Symbol;
+                                if (cand != null && !cand.Locations.Any(l => l.IsInSource))
+                                {
+                                    symbol = cand;
+                                    break;
+                                }
+                                symbol ??= cand;
+                            }
+                        }
+
+                        if (symbol is ILocalSymbol localSym)
+                        {
+                            symbol = localSym.Type;
+                        }
+                        else if (symbol is IParameterSymbol paramSym)
+                        {
+                            symbol = paramSym.Type;
+                        }
+                        else if (symbol is IFieldSymbol fieldSym && fieldSym.Locations.Any(l => l.IsInSource))
+                        {
+                            symbol = fieldSym.Type;
+                        }
+                        else if (symbol is IPropertySymbol propSym && propSym.Locations.Any(l => l.IsInSource))
+                        {
+                            symbol = propSym.Type;
+                        }
+                        else if (symbol is IEventSymbol eventSym && eventSym.Locations.Any(l => l.IsInSource))
+                        {
+                            symbol = eventSym.Type;
+                        }
+
+                        if (symbol != null)
+                        {
+                            var containingType = (symbol as INamedTypeSymbol) ?? symbol.ContainingType;
+                            if (containingType != null)
+                            {
+                                targetTypeName = containingType.OriginalDefinition.ToDisplayString();
+                            }
+                            if (symbol is not INamedTypeSymbol)
+                            {
+                                targetMemberName = symbol.Name;
+                            }
+
+                            if (compilation != null)
+                            {
+                                assemblyPath = ResolveAssemblyPath(compilation, symbol.ContainingAssembly);
+                            }
                         }
                     }
                 }
@@ -89,101 +146,78 @@ public sealed class ILSpyDecompiler : IAssemblyDecompiler
             if (fullSym.Length > 2 && fullSym[1] == ':' && char.IsLetter(fullSym[0]))
             {
                 docPrefix = char.ToUpperInvariant(fullSym[0]);
+                if (compilation != null)
+                {
+                    var resolvedDocSym = DocumentationCommentId.GetFirstSymbolForDeclarationId(fullSym, compilation);
+                    if (resolvedDocSym != null)
+                    {
+                        var containingType = (resolvedDocSym as INamedTypeSymbol) ?? resolvedDocSym.ContainingType;
+                        if (containingType != null)
+                        {
+                            targetTypeName = containingType.OriginalDefinition.ToDisplayString();
+                        }
+                        if (resolvedDocSym is not INamedTypeSymbol && string.IsNullOrWhiteSpace(targetMemberName))
+                        {
+                            targetMemberName = resolvedDocSym.Name;
+                        }
+                        assemblyPath = ResolveAssemblyPath(compilation, resolvedDocSym.ContainingAssembly);
+                    }
+                }
                 fullSym = fullSym[2..];
             }
 
-            var parenIdx = fullSym.IndexOf('(');
-            if (parenIdx >= 0)
+            if (string.IsNullOrWhiteSpace(targetTypeName))
             {
-                fullSym = fullSym[..parenIdx];
-            }
-
-            if (docPrefix == 'T')
-            {
-                targetTypeName = fullSym;
-            }
-            else
-            {
-                var lastDot = fullSym.LastIndexOf('.');
-                if (lastDot > 0)
+                var hadParens = false;
+                var parenIdx = fullSym.IndexOf('(');
+                if (parenIdx >= 0)
                 {
-                    targetTypeName = fullSym[..lastDot];
-                    targetMemberName = fullSym[(lastDot + 1)..];
+                    fullSym = fullSym[..parenIdx];
+                    hadParens = true;
                 }
-                else
+
+                if (docPrefix == 'T')
                 {
                     targetTypeName = fullSym;
                 }
-            }
-        }
-
-        if (assemblyPath == null && compilation != null && !string.IsNullOrWhiteSpace(targetTypeName))
-        {
-            var cleanTypeName = NormalizeTypeNameForMetadata(targetTypeName);
-            var typeSymbol = compilation.GetTypeByMetadataName(cleanTypeName)
-                ?? compilation.GetTypeByMetadataName(targetTypeName);
-
-            if (typeSymbol != null)
-            {
-                assemblyPath = ResolveAssemblyPath(compilation, typeSymbol.ContainingAssembly);
-            }
-        }
-
-        if (assemblyPath == null && compilation != null && !string.IsNullOrWhiteSpace(criteria.Assembly))
-        {
-            assemblyPath = ResolveAssemblyPathByName(compilation, criteria.Assembly);
-        }
-
-        // Check other projects in the solution if not found in preferred project
-        if (assemblyPath == null && roslynSnapshot != null && (!string.IsNullOrWhiteSpace(targetTypeName) || !string.IsNullOrWhiteSpace(criteria.Assembly)))
-        {
-            foreach (var proj in roslynSnapshot.Solution.Projects)
-            {
-                if (preferredProject != null && proj.Id == preferredProject.Id) continue;
-                var projCompilation = await roslynSnapshot.GetCompilationAsync(proj.Id, ct);
-                if (projCompilation == null) continue;
-
-                if (assemblyPath == null && !string.IsNullOrWhiteSpace(targetTypeName))
+                else
                 {
-                    var cleanTypeName = NormalizeTypeNameForMetadata(targetTypeName);
-                    var typeSymbol = projCompilation.GetTypeByMetadataName(cleanTypeName)
-                        ?? projCompilation.GetTypeByMetadataName(targetTypeName);
-
-                    if (typeSymbol != null)
+                    var (splitType, splitMember) = SplitTypeAndMember(fullSym);
+                    if (docPrefix != null || hadParens || splitMember is ".ctor" or ".cctor")
                     {
-                        assemblyPath = ResolveAssemblyPath(projCompilation, typeSymbol.ContainingAssembly);
+                        targetTypeName = splitType;
+                        if (string.IsNullOrWhiteSpace(targetMemberName))
+                        {
+                            targetMemberName = splitMember;
+                        }
+                    }
+                    else if (!string.IsNullOrWhiteSpace(targetMemberName) || splitMember == null)
+                    {
+                        targetTypeName = fullSym;
+                    }
+                    else
+                    {
+                        // Unprefixed dotted symbol without parentheses (e.g. "System.Uri" vs "System.Uri.IsLoopback"):
+                        // Try resolving fullSym as a type first; fall back to splitType + splitMember if not a type.
+                        targetTypeName = fullSym;
+                        fallbackTypeFromSymbol = splitType;
+                        fallbackMemberFromSymbol = splitMember;
                     }
                 }
-
-                if (assemblyPath == null && !string.IsNullOrWhiteSpace(criteria.Assembly))
-                {
-                    assemblyPath = ResolveAssemblyPathByName(projCompilation, criteria.Assembly);
-                }
-
-                if (assemblyPath != null) break;
             }
         }
 
-        // Fallback: check shared runtime directory for BCL assemblies
-        if (assemblyPath == null)
+        assemblyPath ??= await TryResolveAssemblyPathAsync(roslynSnapshot, preferredProject, compilation, targetTypeName, criteria.Assembly, ct);
+
+        if (assemblyPath == null && fallbackTypeFromSymbol != null)
         {
-            var runtimeDir = Path.GetDirectoryName(typeof(object).Assembly.Location);
-            if (runtimeDir != null)
+            var fallbackPath = await TryResolveAssemblyPathAsync(roslynSnapshot, preferredProject, compilation, fallbackTypeFromSymbol, criteria.Assembly, ct);
+            if (fallbackPath != null)
             {
-                if (!string.IsNullOrWhiteSpace(criteria.Assembly))
-                {
-                    var cand1 = Path.Combine(runtimeDir, criteria.Assembly.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) ? criteria.Assembly : criteria.Assembly + ".dll");
-                    if (File.Exists(cand1)) assemblyPath = cand1;
-                }
-                if (assemblyPath == null && !string.IsNullOrWhiteSpace(targetTypeName))
-                {
-                    assemblyPath = ResolveRuntimeAssemblyForType(runtimeDir, NormalizeTypeNameForMetadata(targetTypeName));
-                }
-                if (assemblyPath == null)
-                {
-                    var coreLib = Path.Combine(runtimeDir, "System.Private.CoreLib.dll");
-                    if (File.Exists(coreLib)) assemblyPath = coreLib;
-                }
+                targetTypeName = fallbackTypeFromSymbol;
+                targetMemberName ??= fallbackMemberFromSymbol;
+                assemblyPath = fallbackPath;
+                fallbackTypeFromSymbol = null;
             }
         }
 
@@ -210,7 +244,15 @@ public sealed class ILSpyDecompiler : IAssemblyDecompiler
             return null;
         }
 
-        return DecompileInternal(finalAssemblyPath, targetTypeName, targetMemberName, isRefAssemblyOnly);
+        var result = DecompileInternal(finalAssemblyPath, targetTypeName, targetMemberName, isRefAssemblyOnly);
+        if (result == null && fallbackTypeFromSymbol != null)
+        {
+            var fallbackPath = await TryResolveAssemblyPathAsync(roslynSnapshot, preferredProject, compilation, fallbackTypeFromSymbol, criteria.Assembly, ct) ?? assemblyPath;
+            var (finalFallbackPath, fallbackRefOnly) = MapToImplementationAssembly(fallbackPath);
+            result = DecompileInternal(finalFallbackPath, fallbackTypeFromSymbol, fallbackMemberFromSymbol, fallbackRefOnly);
+        }
+
+        return result;
     }
 
     private static DecompiledSource? DecompileInternal(
@@ -263,22 +305,14 @@ public sealed class ILSpyDecompiler : IAssemblyDecompiler
 
         if (!string.IsNullOrWhiteSpace(memberName))
         {
-            var cleanMemberName = memberName;
-            var parenIdx = cleanMemberName.IndexOf('(');
-            if (parenIdx >= 0)
-            {
-                cleanMemberName = cleanMemberName[..parenIdx];
-            }
-            if (cleanMemberName.Contains('.'))
-            {
-                cleanMemberName = cleanMemberName[(cleanMemberName.LastIndexOf('.') + 1)..];
-            }
-            cleanMemberName = cleanMemberName.Trim();
+            var cleanMemberName = NormalizeMemberName(memberName);
 
             // Single member decompilation
             var member = typeDefinition.Members.FirstOrDefault(m =>
                 string.Equals(m.Name, cleanMemberName, StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(m.Name, memberName, StringComparison.OrdinalIgnoreCase));
+                string.Equals(m.Name, memberName, StringComparison.OrdinalIgnoreCase) ||
+                (cleanMemberName == ".ctor" && m.SymbolKind == ICSharpCode.Decompiler.TypeSystem.SymbolKind.Constructor && !m.IsStatic) ||
+                (cleanMemberName == ".cctor" && m.SymbolKind == ICSharpCode.Decompiler.TypeSystem.SymbolKind.Constructor && m.IsStatic));
 
             if (member == null || member.MetadataToken.IsNil)
             {
@@ -309,6 +343,169 @@ public sealed class ILSpyDecompiler : IAssemblyDecompiler
             LanguageVersion: "CSharp10",
             Source: decompiledSource,
             IsReferenceAssemblyOnly: isRefAssemblyOnly);
+    }
+
+    private static async Task<string?> TryResolveAssemblyPathAsync(
+        RoslynWorkspaceSnapshot? roslynSnapshot,
+        Project? preferredProject,
+        Compilation? compilation,
+        string? targetTypeName,
+        string? assemblyName,
+        CancellationToken ct)
+    {
+        string? assemblyPath = null;
+
+        if (compilation != null && !string.IsNullOrWhiteSpace(targetTypeName))
+        {
+            var cleanTypeName = NormalizeTypeNameForMetadata(targetTypeName);
+            var typeSymbol = compilation.GetTypeByMetadataName(cleanTypeName)
+                ?? compilation.GetTypeByMetadataName(targetTypeName);
+
+            if (typeSymbol != null)
+            {
+                assemblyPath = ResolveAssemblyPath(compilation, typeSymbol.ContainingAssembly);
+            }
+        }
+
+        if (assemblyPath == null && compilation != null && !string.IsNullOrWhiteSpace(assemblyName))
+        {
+            assemblyPath = ResolveAssemblyPathByName(compilation, assemblyName);
+        }
+
+        // Check other projects in the solution if not found in preferred project
+        if (assemblyPath == null && roslynSnapshot != null && (!string.IsNullOrWhiteSpace(targetTypeName) || !string.IsNullOrWhiteSpace(assemblyName)))
+        {
+            foreach (var proj in roslynSnapshot.Solution.Projects)
+            {
+                if (preferredProject != null && proj.Id == preferredProject.Id) continue;
+                var projCompilation = await roslynSnapshot.GetCompilationAsync(proj.Id, ct);
+                if (projCompilation == null) continue;
+
+                if (assemblyPath == null && !string.IsNullOrWhiteSpace(targetTypeName))
+                {
+                    var cleanTypeName = NormalizeTypeNameForMetadata(targetTypeName);
+                    var typeSymbol = projCompilation.GetTypeByMetadataName(cleanTypeName)
+                        ?? projCompilation.GetTypeByMetadataName(targetTypeName);
+
+                    if (typeSymbol != null)
+                    {
+                        assemblyPath = ResolveAssemblyPath(projCompilation, typeSymbol.ContainingAssembly);
+                    }
+                }
+
+                if (assemblyPath == null && !string.IsNullOrWhiteSpace(assemblyName))
+                {
+                    assemblyPath = ResolveAssemblyPathByName(projCompilation, assemblyName);
+                }
+
+                if (assemblyPath != null) break;
+            }
+        }
+
+        // Fallback: check shared runtime directory for BCL assemblies
+        if (assemblyPath == null)
+        {
+            var runtimeDir = Path.GetDirectoryName(typeof(object).Assembly.Location);
+            if (runtimeDir != null)
+            {
+                if (!string.IsNullOrWhiteSpace(assemblyName))
+                {
+                    var cand1 = Path.Combine(runtimeDir, assemblyName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) ? assemblyName : assemblyName + ".dll");
+                    if (File.Exists(cand1)) assemblyPath = cand1;
+                }
+                if (assemblyPath == null && !string.IsNullOrWhiteSpace(targetTypeName))
+                {
+                    assemblyPath = ResolveRuntimeAssemblyForType(runtimeDir, NormalizeTypeNameForMetadata(targetTypeName));
+                }
+            }
+        }
+
+        return assemblyPath;
+    }
+
+    private static (string TypeName, string? MemberName) SplitTypeAndMember(string fullSym)
+    {
+        if (fullSym.EndsWith("..ctor", StringComparison.OrdinalIgnoreCase))
+        {
+            return (fullSym[..^6], ".ctor");
+        }
+        if (fullSym.EndsWith("..cctor", StringComparison.OrdinalIgnoreCase))
+        {
+            return (fullSym[..^7], ".cctor");
+        }
+        if (fullSym.EndsWith(".#ctor", StringComparison.OrdinalIgnoreCase))
+        {
+            return (fullSym[..^6], ".ctor");
+        }
+        if (fullSym.EndsWith(".#cctor", StringComparison.OrdinalIgnoreCase))
+        {
+            return (fullSym[..^7], ".cctor");
+        }
+
+        // Find last dot outside of angle brackets <...>
+        int depth = 0;
+        int lastDot = -1;
+        for (int i = 0; i < fullSym.Length; i++)
+        {
+            char c = fullSym[i];
+            if (c == '<') depth++;
+            else if (c == '>' && depth > 0) depth--;
+            else if (c == '.' && depth == 0) lastDot = i;
+        }
+
+        if (lastDot > 0)
+        {
+            return (fullSym[..lastDot], fullSym[(lastDot + 1)..]);
+        }
+
+        return (fullSym, null);
+    }
+
+    private static string NormalizeMemberName(string memberName)
+    {
+        var clean = memberName.Trim();
+        var parenIdx = clean.IndexOf('(');
+        if (parenIdx >= 0)
+        {
+            clean = clean[..parenIdx];
+        }
+
+        if (clean.EndsWith("..ctor", StringComparison.OrdinalIgnoreCase) ||
+            clean.EndsWith(".#ctor", StringComparison.OrdinalIgnoreCase) ||
+            clean.EndsWith(".ctor", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(clean, "#ctor", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(clean, "ctor", StringComparison.OrdinalIgnoreCase))
+        {
+            return ".ctor";
+        }
+
+        if (clean.EndsWith("..cctor", StringComparison.OrdinalIgnoreCase) ||
+            clean.EndsWith(".#cctor", StringComparison.OrdinalIgnoreCase) ||
+            clean.EndsWith(".cctor", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(clean, "#cctor", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(clean, "cctor", StringComparison.OrdinalIgnoreCase))
+        {
+            return ".cctor";
+        }
+
+        var backtickIdx = clean.IndexOf('`');
+        if (backtickIdx >= 0)
+        {
+            clean = clean[..backtickIdx];
+        }
+
+        var angleIdx = clean.IndexOf('<');
+        if (angleIdx >= 0)
+        {
+            clean = clean[..angleIdx];
+        }
+
+        if (clean.Contains('.'))
+        {
+            clean = clean[(clean.LastIndexOf('.') + 1)..];
+        }
+
+        return clean.Trim();
     }
 
     private static string? ResolveAssemblyPath(Compilation compilation, IAssemblySymbol? assemblySymbol)
@@ -381,41 +578,125 @@ public sealed class ILSpyDecompiler : IAssemblyDecompiler
     private static string? StripDocIdPrefix(string? value)
     {
         if (string.IsNullOrWhiteSpace(value)) return value;
-        var trimmed = value.Trim();
+        var trimmed = value.Trim().TrimEnd('?');
         if (trimmed.Length > 2 && trimmed[1] == ':' && char.IsLetter(trimmed[0]))
         {
-            return trimmed[2..];
+            return trimmed[2..].Trim().TrimEnd('?');
         }
         return trimmed;
     }
 
     private static string? ResolveRuntimeAssemblyForType(string runtimeDir, string cleanTypeName)
     {
-        // Try loaded or standard BCL type resolution first
+        // 1. Try standard BCL / CoreLib type resolution first
         var runtimeType = Type.GetType(cleanTypeName, throwOnError: false, ignoreCase: true);
         if (runtimeType != null && !string.IsNullOrWhiteSpace(runtimeType.Assembly.Location) && File.Exists(runtimeType.Assembly.Location))
         {
             return runtimeType.Assembly.Location;
         }
 
-        // Try System.Runtime.dll which holds type forwarders for core BCL types (like System.Uri -> System.Private.Uri)
-        var sysRuntime = Path.Combine(runtimeDir, "System.Runtime.dll");
-        if (File.Exists(sysRuntime))
+        // 2. Check loaded assemblies in the current AppDomain
+        foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
         {
-            return sysRuntime;
+            if (asm.IsDynamic) continue;
+            try
+            {
+                var loadedType = asm.GetType(cleanTypeName, throwOnError: false, ignoreCase: true);
+                if (loadedType != null && !string.IsNullOrWhiteSpace(loadedType.Assembly.Location) && File.Exists(loadedType.Assembly.Location))
+                {
+                    return loadedType.Assembly.Location;
+                }
+            }
+            catch
+            {
+                // Ignore assembly inspection errors
+            }
+        }
+
+        // 3. Check candidate runtime DLLs matching namespace prefixes (longest prefix first)
+        var candidateDlls = new List<string>();
+        var baseNameWithoutArity = cleanTypeName.Contains('`')
+            ? cleanTypeName[..cleanTypeName.IndexOf('`')]
+            : cleanTypeName;
+
+        var prefix = baseNameWithoutArity;
+        while (!string.IsNullOrWhiteSpace(prefix))
+        {
+            var candPath = Path.Combine(runtimeDir, prefix + ".dll");
+            if (File.Exists(candPath) && !candidateDlls.Contains(candPath, StringComparer.OrdinalIgnoreCase))
+            {
+                candidateDlls.Add(candPath);
+            }
+
+            var lastDot = prefix.LastIndexOf('.');
+            if (lastDot <= 0) break;
+            prefix = prefix[..lastDot];
+        }
+
+        var sysRuntime = Path.Combine(runtimeDir, "System.Runtime.dll");
+        if (File.Exists(sysRuntime) && !candidateDlls.Contains(sysRuntime, StringComparer.OrdinalIgnoreCase))
+        {
+            candidateDlls.Add(sysRuntime);
+        }
+
+        var coreLib = Path.Combine(runtimeDir, "System.Private.CoreLib.dll");
+        if (File.Exists(coreLib) && !candidateDlls.Contains(coreLib, StringComparer.OrdinalIgnoreCase))
+        {
+            candidateDlls.Add(coreLib);
+        }
+
+        foreach (var candidateDll in candidateDlls)
+        {
+            if (AssemblyDefinesOrForwardsType(candidateDll, cleanTypeName))
+            {
+                return candidateDll;
+            }
         }
 
         return null;
     }
 
+    private static bool AssemblyDefinesOrForwardsType(string assemblyPath, string cleanTypeName)
+    {
+        try
+        {
+            var settings = new DecompilerSettings(LanguageVersion.CSharp10_0)
+            {
+                ThrowOnAssemblyResolveErrors = false
+            };
+            var decompiler = new CSharpDecompiler(assemblyPath, settings);
+            var fullTypeName = new FullTypeName(cleanTypeName);
+            var typeDef = decompiler.TypeSystem.MainModule.Compilation.FindType(fullTypeName).GetDefinition();
+            if (typeDef != null) return true;
+
+            return decompiler.TypeSystem.MainModule.TypeDefinitions.Any(t =>
+                string.Equals(t.FullName, cleanTypeName, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(t.Name, cleanTypeName, StringComparison.OrdinalIgnoreCase));
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private static string NormalizeTypeNameForMetadata(string typeName)
     {
-        // Convert C# generic syntax like List<T> or Dictionary<TKey, TValue> to List`1 or Dictionary`2
-        if (!typeName.Contains('<')) return typeName;
+        // Convert C# generic syntax like List<T> or Dictionary<TKey, List<TValue>> to List`1 or Dictionary`2
+        var openIdx = typeName.IndexOf('<');
+        var closeIdx = typeName.LastIndexOf('>');
+        if (openIdx < 0 || closeIdx <= openIdx) return typeName;
 
-        var baseName = typeName[..typeName.IndexOf('<', StringComparison.Ordinal)];
-        var genericPart = typeName[(typeName.IndexOf('<', StringComparison.Ordinal) + 1)..typeName.LastIndexOf('>')];
-        var argCount = genericPart.Count(c => c == ',') + 1;
+        var baseName = typeName[..openIdx];
+        var genericPart = typeName[(openIdx + 1)..closeIdx];
+        int argCount = 1;
+        int depth = 0;
+        for (int i = 0; i < genericPart.Length; i++)
+        {
+            char c = genericPart[i];
+            if (c == '<') depth++;
+            else if (c == '>' && depth > 0) depth--;
+            else if (c == ',' && depth == 0) argCount++;
+        }
 
         return $"{baseName}`{argCount}";
     }
