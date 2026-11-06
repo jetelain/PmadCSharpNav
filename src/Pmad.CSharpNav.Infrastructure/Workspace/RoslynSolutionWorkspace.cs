@@ -246,10 +246,10 @@ public sealed class RoslynSolutionWorkspace : ISolutionWorkspace, IDisposable
             SolutionPath: _targetPath,
             ProjectCount: projectCount,
             MemoryUsageBytes: memoryBytes,
-            CacheStatus: "Ready",
+            CacheStatus: _state == "unhealthy" ? "Unhealthy" : "Ready",
             SnapshotVersion: version,
             StartedAt: _startedAt,
-            State: snapshot == null ? "loading" : (snapshot.IsStale ? "reloading" : "ready"));
+            State: _state == "unhealthy" ? "unhealthy" : (snapshot == null ? "loading" : (snapshot.IsStale ? "reloading" : "ready")));
 
         return Task.FromResult(status);
     }

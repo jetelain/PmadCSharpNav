@@ -11,9 +11,9 @@ public static class SearchCommand
     {
         var patternArg = new Argument<string?>("pattern") { Description = "Symbol name or search pattern (wildcards * supported, e.g. *Repository)", Arity = ArgumentArity.ZeroOrOne };
         var docOption = new Option<string?>("--doc") { Description = "Full-text search across XML documentation comments (summary, param, returns)" };
-        var scopeOption = new Option<string>("--scope") { Description = "Search scope: all (default), source, dependencies, or assembly name", DefaultValueFactory = _ => "all" };
+        var scopeOption = new Option<string>("--scope") { Description = "Search scope: all (default), solution, source, dependencies, or assembly/project name", DefaultValueFactory = _ => "all" };
         var projectOption = new Option<string?>("--project") { Description = "Filter search results to a specific project name" };
-        var kindOption = new Option<string>("--kind") { Description = "Filter by symbol kind: type, method, property, field, event, or all", DefaultValueFactory = _ => "all" };
+        var kindOption = new Option<string>("--kind") { Description = "Filter by symbol kind (case-insensitive, comma-separated): type, class, interface, struct, record, enum, delegate, method, constructor, property, field, event, or all", DefaultValueFactory = _ => "all" };
         var accessOption = new Option<string>("--access") { Description = "Filter by accessibility: public (default), internal, or all", DefaultValueFactory = _ => "public" };
         var limitOption = new Option<int>("--limit") { Description = "Maximum number of results to return", DefaultValueFactory = _ => 50 };
         var offsetOption = new Option<int>("--offset") { Description = "Offset for pagination", DefaultValueFactory = _ => 0 };

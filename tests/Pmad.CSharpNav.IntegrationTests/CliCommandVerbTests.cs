@@ -56,7 +56,9 @@ public sealed class CliCommandVerbTests
 
     [Theory]
     [InlineData("references --symbol MyClass")]
+    [InlineData("reference --symbol MyClass")]
     [InlineData("refs --symbol MyClass")]
+    [InlineData("ref --symbol MyClass")]
     [InlineData("find-refs --symbol MyClass")]
     public void References_Command_And_Aliases_Parse_Successfully(string commandLine)
     {
@@ -99,6 +101,7 @@ public sealed class CliCommandVerbTests
     [InlineData("server start --format json")]
     [InlineData("server status")]
     [InlineData("server status --format json")]
+    [InlineData("server reload")]
     [InlineData("server stop")]
     public void Server_Command_Parses_Successfully(string commandLine)
     {

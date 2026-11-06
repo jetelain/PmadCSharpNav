@@ -759,23 +759,23 @@ public sealed class RoslynApiSearchEngine : IApiSearchEngine
             return true;
         }
 
-        if (kindCriteria.Equals("type", StringComparison.OrdinalIgnoreCase))
-        {
-            return IsType(kind);
-        }
-
-        var kindStr = kind.ToString();
         if (kindCriteria.Contains(','))
         {
             return kindCriteria
                 .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .Any(k => k.Equals("type", StringComparison.OrdinalIgnoreCase)
-                    ? IsType(kind)
-                    : kindStr.Equals(k, StringComparison.OrdinalIgnoreCase));
+                .Any(k => MatchesSingleKind(kind, k));
         }
 
-        return kindStr.Equals(kindCriteria, StringComparison.OrdinalIgnoreCase) ||
-               (kind == DomainSymbolKind.Record && kindCriteria.Equals("class", StringComparison.OrdinalIgnoreCase));
+        return MatchesSingleKind(kind, kindCriteria);
+    }
+
+    private static bool MatchesSingleKind(DomainSymbolKind kind, string k)
+    {
+        if (k.Equals("all", StringComparison.OrdinalIgnoreCase)) return true;
+        if (k.Equals("type", StringComparison.OrdinalIgnoreCase)) return IsType(kind);
+        if (k.Equals("member", StringComparison.OrdinalIgnoreCase)) return IsMember(kind);
+        if (kind == DomainSymbolKind.Record && k.Equals("class", StringComparison.OrdinalIgnoreCase)) return true;
+        return kind.ToString().Equals(k, StringComparison.OrdinalIgnoreCase);
     }
 
     private static ITypeSymbol? GetSymbolReturnType(ISymbol symbol) =>

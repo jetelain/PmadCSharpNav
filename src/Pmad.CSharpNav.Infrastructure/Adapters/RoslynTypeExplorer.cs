@@ -21,6 +21,11 @@ public sealed class RoslynTypeExplorer : ITypeExplorer
         ExploreOptions options,
         CancellationToken ct = default)
     {
+        if (typeName.Length > 2 && typeName[1] == ':' && char.IsLetter(typeName[0]))
+        {
+            typeName = typeName[2..];
+        }
+
         var roslynSnapshot = (RoslynWorkspaceSnapshot)snapshot;
         INamedTypeSymbol? foundType = null;
 
@@ -116,7 +121,11 @@ public sealed class RoslynTypeExplorer : ITypeExplorer
         if (node == null) return null;
 
         var typeInfo = semanticModel.GetTypeInfo(node, ct);
-        var typeSymbol = typeInfo.Type ?? (semanticModel.GetSymbolInfo(node, ct).Symbol as ITypeSymbol);
+        var declared = semanticModel.GetDeclaredSymbol(node, ct);
+        var typeSymbol = typeInfo.Type
+                         ?? (semanticModel.GetSymbolInfo(node, ct).Symbol as ITypeSymbol)
+                         ?? (declared as ITypeSymbol)
+                         ?? declared?.ContainingType;
 
         if (typeSymbol == null)
         {
@@ -124,8 +133,31 @@ public sealed class RoslynTypeExplorer : ITypeExplorer
             while (parent != null && typeSymbol == null)
             {
                 typeInfo = semanticModel.GetTypeInfo(parent, ct);
-                typeSymbol = typeInfo.Type ?? (semanticModel.GetSymbolInfo(parent, ct).Symbol as ITypeSymbol);
+                var parentDeclared = semanticModel.GetDeclaredSymbol(parent, ct);
+                typeSymbol = typeInfo.Type
+                             ?? (semanticModel.GetSymbolInfo(parent, ct).Symbol as ITypeSymbol)
+                             ?? (parentDeclared as ITypeSymbol)
+                             ?? parentDeclared?.ContainingType;
                 parent = parent.Parent;
+            }
+        }
+
+        if (typeSymbol == null)
+        {
+            // Fallback when column=1 or line=1 points to whitespace/comments/usings: find declaration on that line or in file
+            var lineDecl = root.DescendantNodes()
+                .FirstOrDefault(n =>
+                {
+                    var span = n.GetLocation().GetLineSpan();
+                    return span.StartLinePosition.Line <= line - 1 &&
+                           span.EndLinePosition.Line >= line - 1 &&
+                           semanticModel.GetDeclaredSymbol(n, ct) is ITypeSymbol;
+                })
+                ?? root.DescendantNodes().FirstOrDefault(n => semanticModel.GetDeclaredSymbol(n, ct) is ITypeSymbol);
+
+            if (lineDecl != null)
+            {
+                typeSymbol = semanticModel.GetDeclaredSymbol(lineDecl, ct) as ITypeSymbol;
             }
         }
 

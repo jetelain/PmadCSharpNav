@@ -27,13 +27,15 @@ public sealed class ExploreTypeHandler
 
         TypeExplorationResult? result;
 
-        if (!string.IsNullOrWhiteSpace(request.File) && request.Line.HasValue && request.Column.HasValue)
+        if (!string.IsNullOrWhiteSpace(request.File))
         {
+            var line = request.Line ?? 1;
+            var col = request.Column ?? 1;
             result = await _explorer.ExploreTypeAtLocationAsync(
                 snapshot,
                 request.File,
-                request.Line.Value,
-                request.Column.Value,
+                line,
+                col,
                 options,
                 ct);
 
@@ -41,7 +43,7 @@ public sealed class ExploreTypeHandler
             {
                 throw new NavException(
                     "TYPE_NOT_FOUND",
-                    $"No type expression could be evaluated at {request.File}:{request.Line}:{request.Column}");
+                    $"No type expression could be evaluated at {request.File}:{line}:{col}");
             }
         }
         else if (!string.IsNullOrWhiteSpace(request.Type))
