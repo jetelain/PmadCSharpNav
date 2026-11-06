@@ -46,7 +46,7 @@
              Properties="Configuration=$(Configuration);PublishDir=$(MSBuildProjectDirectory)\obj\$(Configuration)\$(TargetFramework)\server_publish\" />
     <ItemGroup>
       <_ServerPublishedFiles Include="$(MSBuildProjectDirectory)\obj\$(Configuration)\$(TargetFramework)\server_publish\**\*.*" />
-      <None Include="@(_ServerPublishedFiles)" Pack="true" PackagePath="tools/$(TargetFramework)/any/%(RecursiveDir)" Visible="false" />
+      <None Include="@(_ServerPublishedFiles)" Pack="true" PackagePath="tools/$(TargetFramework)/any/" Visible="false" />
     </ItemGroup>
   </Target>
 
