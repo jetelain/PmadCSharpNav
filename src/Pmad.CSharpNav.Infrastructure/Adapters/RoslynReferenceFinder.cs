@@ -49,18 +49,31 @@ public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder,
         var node = token.Parent;
         if (node == null) return null;
 
-        var symbol = semanticModel.GetSymbolInfo(node, ct).Symbol
-                     ?? semanticModel.GetDeclaredSymbol(node, ct);
+        var symbol = ResolveSymbolFromNode(semanticModel, node, ct);
 
         if (symbol == null)
         {
+            var isInsideStatement = node.AncestorsAndSelf().Any(a => a is StatementSyntax);
             // Try parent expressions if token was part of a larger expression
             var parent = node.Parent;
             while (parent != null && symbol == null)
             {
-                symbol = semanticModel.GetSymbolInfo(parent, ct).Symbol
-                         ?? semanticModel.GetDeclaredSymbol(parent, ct);
+                if (isInsideStatement && parent is MemberDeclarationSyntax or BaseTypeDeclarationSyntax)
+                {
+                    break;
+                }
+                symbol = ResolveSymbolFromNode(semanticModel, parent, ct);
                 parent = parent.Parent;
+            }
+        }
+
+        if (symbol == null)
+        {
+            foreach (var tok in root.DescendantTokens(textLine.Span))
+            {
+                if (tok.Parent == null) continue;
+                symbol = ResolveSymbolFromNode(semanticModel, tok.Parent, ct);
+                if (symbol != null) break;
             }
         }
 
@@ -179,6 +192,8 @@ public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder,
         var roslynSnapshot = (RoslynWorkspaceSnapshot)snapshot;
         var results = new List<SymbolResolutionResult>();
 
+        symbolName = symbolName.Trim();
+
         // Check if symbolName is a DocumentationCommentId (e.g. M:MyNamespace.MyClass.MyMethod or T:MyNamespace.MyClass)
         if (symbolName.Length > 2 && symbolName[1] == ':' && char.IsLetter(symbolName[0]))
         {
@@ -198,6 +213,9 @@ public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder,
                     return results;
                 }
             }
+
+            // Strip Doc-ID prefix if exact Doc-ID resolution did not match (e.g. T:SimpleName without namespace or M:Type.Method without parameter types)
+            symbolName = symbolName[2..].Trim();
         }
 
         // Strip parameter lists if provided (e.g. OrderService.PlaceOrder(OrderDto) -> PlaceOrder)
@@ -383,8 +401,23 @@ public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder,
                     MethodDeclarationSyntax m => m.Identifier.Text,
                     PropertyDeclarationSyntax p => p.Identifier.Text,
                     ConstructorDeclarationSyntax c => c.Identifier.Text,
+                    EventDeclarationSyntax e => e.Identifier.Text,
+                    EventFieldDeclarationSyntax ef => ef.Declaration.Variables.FirstOrDefault()?.Identifier.Text,
+                    FieldDeclarationSyntax f => f.Declaration.Variables.FirstOrDefault()?.Identifier.Text,
                     _ => null
                 };
+
+                var containingTypeDecl = token?.Parent?.AncestorsAndSelf()
+                    .OfType<BaseTypeDeclarationSyntax>()
+                    .FirstOrDefault();
+                string? containingTypeName = null;
+                if (containingTypeDecl != null)
+                {
+                    var ns = containingTypeDecl.Ancestors().OfType<BaseNamespaceDeclarationSyntax>().FirstOrDefault()?.Name.ToString();
+                    containingTypeName = string.IsNullOrEmpty(ns)
+                        ? containingTypeDecl.Identifier.Text
+                        : $"{ns}.{containingTypeDecl.Identifier.Text}";
+                }
 
                 var kind = ClassifyReference(token?.Parent);
 
@@ -395,7 +428,8 @@ public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder,
                     Snippet: snippet,
                     ContainingMember: memberName,
                     Kind: kind,
-                    IsGenerated: isGenerated));
+                    IsGenerated: isGenerated,
+                    ContainingType: containingTypeName));
             }
         }
 
@@ -407,7 +441,7 @@ public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder,
             {
                 foreach (var loc in over.Locations.Where(l => l.IsInSource))
                 {
-                    await AddLocationFromSourceAsync(loc, ReferenceKind.Override, results, options, roslynSnapshot, mappedSourceTextCache, ct);
+                    await AddLocationFromSourceAsync(loc, over, ReferenceKind.Override, results, options, roslynSnapshot, mappedSourceTextCache, ct);
                 }
             }
         }
@@ -420,7 +454,7 @@ public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder,
             {
                 foreach (var loc in impl.Locations.Where(l => l.IsInSource))
                 {
-                    await AddLocationFromSourceAsync(loc, ReferenceKind.Implementation, results, options, roslynSnapshot, mappedSourceTextCache, ct);
+                    await AddLocationFromSourceAsync(loc, impl, ReferenceKind.Implementation, results, options, roslynSnapshot, mappedSourceTextCache, ct);
                 }
             }
         }
@@ -430,6 +464,7 @@ public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder,
 
     private static async Task AddLocationFromSourceAsync(
         Location loc,
+        ISymbol targetSymbol,
         ReferenceKind kind,
         List<DomainReferenceLocation> results,
         ReferenceSearchOptions options,
@@ -503,9 +538,36 @@ public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder,
             Line: line.Value,
             Column: col ?? 1,
             Snippet: snippet,
-            ContainingMember: null,
+            ContainingMember: targetSymbol is not INamedTypeSymbol ? targetSymbol.Name : null,
             Kind: kind,
-            IsGenerated: isGen));
+            IsGenerated: isGen,
+            ContainingType: targetSymbol.ContainingType?.ToDisplayString() ?? (targetSymbol as INamedTypeSymbol)?.ToDisplayString()));
+    }
+
+    private static ISymbol? ResolveSymbolFromNode(SemanticModel semanticModel, SyntaxNode node, CancellationToken ct)
+    {
+        var sym = semanticModel.GetSymbolInfo(node, ct).Symbol
+                  ?? semanticModel.GetDeclaredSymbol(node, ct);
+        if (sym != null) return sym;
+
+        if (node is BaseFieldDeclarationSyntax fieldDecl)
+        {
+            var firstVar = fieldDecl.Declaration.Variables.FirstOrDefault();
+            if (firstVar != null)
+            {
+                return semanticModel.GetDeclaredSymbol(firstVar, ct);
+            }
+        }
+        else if (node is LocalDeclarationStatementSyntax localDecl)
+        {
+            var firstVar = localDecl.Declaration.Variables.FirstOrDefault();
+            if (firstVar != null)
+            {
+                return semanticModel.GetDeclaredSymbol(firstVar, ct);
+            }
+        }
+
+        return null;
     }
 
     private static ReferenceKind ClassifyReference(SyntaxNode? node)
@@ -677,6 +739,7 @@ public sealed class RoslynReferenceFinder : IReferenceFinder, IDefinitionFinder,
             INamedTypeSymbol t when t.TypeKind == TypeKind.Interface => DomainSymbolKind.Interface,
             INamedTypeSymbol t when t.TypeKind == TypeKind.Enum => DomainSymbolKind.Enum,
             INamedTypeSymbol t when t.TypeKind == TypeKind.Struct => DomainSymbolKind.Struct,
+            INamedTypeSymbol t when t.TypeKind == TypeKind.Delegate => DomainSymbolKind.Delegate,
             INamedTypeSymbol t when t.IsRecord => DomainSymbolKind.Record,
             INamedTypeSymbol => DomainSymbolKind.Class,
             IMethodSymbol m when m.MethodKind == MethodKind.Constructor => DomainSymbolKind.Constructor,

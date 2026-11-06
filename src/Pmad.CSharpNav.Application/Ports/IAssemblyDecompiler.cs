@@ -18,7 +18,7 @@ public sealed record DecompileCriteria(
 public interface IAssemblyDecompiler
 {
     Task<DecompiledSource?> DecompileAsync(
-        IWorkspaceSnapshot snapshot,
+        IWorkspaceSnapshot? snapshot,
         DecompileCriteria criteria,
         CancellationToken ct = default);
 }

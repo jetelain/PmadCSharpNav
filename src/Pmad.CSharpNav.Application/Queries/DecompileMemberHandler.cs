@@ -17,7 +17,15 @@ public sealed class DecompileMemberHandler
 
     public async Task<DecompileResponse> HandleAsync(DecompileRequest request, CancellationToken ct = default)
     {
-        var snapshot = await _workspace.GetCurrentSnapshotAsync(ct);
+        IWorkspaceSnapshot? snapshot = null;
+        try
+        {
+            snapshot = await _workspace.GetCurrentSnapshotAsync(ct);
+        }
+        catch (Exception) when (string.IsNullOrWhiteSpace(request.File) && !ct.IsCancellationRequested)
+        {
+            // Allow standalone decompilation of external BCL / runtime assemblies even when the workspace is unavailable
+        }
 
         var criteria = new DecompileCriteria(
             Assembly: request.Assembly,
@@ -43,7 +51,7 @@ public sealed class DecompileMemberHandler
             LanguageVersion: decompiled.LanguageVersion,
             Source: decompiled.Source,
             IsReferenceAssemblyOnly: decompiled.IsReferenceAssemblyOnly,
-            SnapshotVersion: snapshot.SnapshotVersion,
-            Stale: snapshot.IsStale ? true : null);
+            SnapshotVersion: snapshot?.SnapshotVersion,
+            Stale: snapshot?.IsStale == true ? true : null);
     }
 }

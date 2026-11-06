@@ -21,6 +21,12 @@ public sealed class RoslynTypeExplorer : ITypeExplorer
         ExploreOptions options,
         CancellationToken ct = default)
     {
+        typeName = typeName.Trim().TrimEnd('?');
+        if (typeName.Length > 2 && typeName[1] == ':' && char.IsLetter(typeName[0]))
+        {
+            typeName = typeName[2..].Trim().TrimEnd('?');
+        }
+
         var roslynSnapshot = (RoslynWorkspaceSnapshot)snapshot;
         INamedTypeSymbol? foundType = null;
 
@@ -94,7 +100,10 @@ public sealed class RoslynTypeExplorer : ITypeExplorer
     {
         var roslynSnapshot = (RoslynWorkspaceSnapshot)snapshot;
         var docId = roslynSnapshot.FindDocumentId(file);
-        if (docId == null) return null;
+        if (docId == null)
+        {
+            return await ExploreTypeInMappedFileAsync(roslynSnapshot, file, line, column, options, ct);
+        }
 
         var document = roslynSnapshot.Solution.GetDocument(docId);
         if (document == null) return null;
@@ -115,18 +124,40 @@ public sealed class RoslynTypeExplorer : ITypeExplorer
         var node = token.Parent;
         if (node == null) return null;
 
-        var typeInfo = semanticModel.GetTypeInfo(node, ct);
-        var typeSymbol = typeInfo.Type ?? (semanticModel.GetSymbolInfo(node, ct).Symbol as ITypeSymbol);
+        var typeSymbol = ResolveTypeSymbolFromNode(semanticModel, node, ct);
 
         if (typeSymbol == null)
         {
             var parent = node.Parent;
             while (parent != null && typeSymbol == null)
             {
-                typeInfo = semanticModel.GetTypeInfo(parent, ct);
-                typeSymbol = typeInfo.Type ?? (semanticModel.GetSymbolInfo(parent, ct).Symbol as ITypeSymbol);
+                typeSymbol = ResolveTypeSymbolFromNode(semanticModel, parent, ct);
                 parent = parent.Parent;
             }
+        }
+
+        if (typeSymbol == null)
+        {
+            // Fallback when column=1 or line=1 points to whitespace/comments/usings: find declaration on that line or in file
+            var lineDecl = root.DescendantNodes()
+                .FirstOrDefault(n =>
+                {
+                    var span = n.GetLocation().GetLineSpan();
+                    return span.StartLinePosition.Line <= line - 1 &&
+                           span.EndLinePosition.Line >= line - 1 &&
+                           semanticModel.GetDeclaredSymbol(n, ct) is ITypeSymbol;
+                })
+                ?? root.DescendantNodes().FirstOrDefault(n => semanticModel.GetDeclaredSymbol(n, ct) is ITypeSymbol);
+
+            if (lineDecl != null)
+            {
+                typeSymbol = semanticModel.GetDeclaredSymbol(lineDecl, ct) as ITypeSymbol;
+            }
+        }
+
+        if (typeSymbol is IArrayTypeSymbol arrayType)
+        {
+            typeSymbol = arrayType.ElementType;
         }
 
         if (typeSymbol is not INamedTypeSymbol namedType)
@@ -137,8 +168,146 @@ public sealed class RoslynTypeExplorer : ITypeExplorer
         return BuildExplorationResult(namedType, options);
     }
 
+    private static ITypeSymbol? ResolveTypeSymbolFromNode(SemanticModel semanticModel, SyntaxNode node, CancellationToken ct)
+    {
+        var typeInfo = semanticModel.GetTypeInfo(node, ct);
+        if (typeInfo.Type != null)
+        {
+            return typeInfo.Type;
+        }
+
+        var sym = semanticModel.GetSymbolInfo(node, ct).Symbol;
+        var symType = UnwrapSymbolType(sym);
+        if (symType != null)
+        {
+            return symType;
+        }
+
+        var declared = semanticModel.GetDeclaredSymbol(node, ct);
+        return UnwrapSymbolType(declared);
+    }
+
+    private static ITypeSymbol? UnwrapSymbolType(ISymbol? symbol) =>
+        symbol switch
+        {
+            null => null,
+            ITypeSymbol t => t,
+            ILocalSymbol l => l.Type,
+            IParameterSymbol p => p.Type,
+            IFieldSymbol f => f.Type,
+            IPropertySymbol prop => prop.Type,
+            IEventSymbol evt => evt.Type,
+            _ => symbol.ContainingType
+        };
+
+    private static async Task<TypeExplorationResult?> ExploreTypeInMappedFileAsync(
+        RoslynWorkspaceSnapshot roslynSnapshot,
+        string file,
+        int line,
+        int column,
+        ExploreOptions options,
+        CancellationToken ct)
+    {
+        var fullPath = Path.GetFullPath(file);
+        var normalizedPath = RoslynWorkspaceSnapshot.NormalizePath(fullPath);
+        var targetLine = Math.Max(0, line - 1);
+        var targetCol = Math.Max(0, column - 1);
+
+        foreach (var project in roslynSnapshot.Solution.Projects)
+        {
+            var compilation = await roslynSnapshot.GetCompilationAsync(project.Id, ct);
+            if (compilation == null) continue;
+
+            foreach (var tree in compilation.SyntaxTrees)
+            {
+                if (!await RoslynWorkspaceSnapshot.SyntaxTreeMapsToFileAsync(tree, normalizedPath, ct))
+                {
+                    continue;
+                }
+
+                var root = await tree.GetRootAsync(ct);
+                var semanticModel = compilation.GetSemanticModel(tree);
+
+                SyntaxToken? bestToken = null;
+                SyntaxToken? fallbackToken = null;
+
+                foreach (var token in root.DescendantTokens())
+                {
+                    if (string.IsNullOrWhiteSpace(token.Text)) continue;
+                    var mapped = token.GetLocation().GetMappedLineSpan();
+                    if (!mapped.HasMappedPath || !RoslynWorkspaceSnapshot.PathMatches(mapped.Path, normalizedPath))
+                    {
+                        continue;
+                    }
+
+                    if (mapped.StartLinePosition.Line <= targetLine && mapped.EndLinePosition.Line >= targetLine)
+                    {
+                        fallbackToken ??= token;
+                        var onStartLine = mapped.StartLinePosition.Line == targetLine;
+                        var onEndLine = mapped.EndLinePosition.Line == targetLine;
+
+                        if ((!onStartLine || mapped.StartLinePosition.Character <= targetCol) &&
+                            (!onEndLine || mapped.EndLinePosition.Character >= targetCol))
+                        {
+                            bestToken = token;
+                            break;
+                        }
+                    }
+                }
+
+                bestToken ??= fallbackToken;
+                ITypeSymbol? typeSymbol = null;
+
+                if (bestToken?.Parent != null)
+                {
+                    var node = bestToken.Value.Parent;
+                    typeSymbol = ResolveTypeSymbolFromNode(semanticModel, node, ct);
+                    var parent = node.Parent;
+                    while (parent != null && typeSymbol == null)
+                    {
+                        typeSymbol = ResolveTypeSymbolFromNode(semanticModel, parent, ct);
+                        parent = parent.Parent;
+                    }
+                }
+
+                if (typeSymbol == null)
+                {
+                    var firstTypeNode = root.DescendantNodes()
+                        .FirstOrDefault(n => semanticModel.GetDeclaredSymbol(n, ct) is ITypeSymbol);
+                    if (firstTypeNode != null)
+                    {
+                        typeSymbol = semanticModel.GetDeclaredSymbol(firstTypeNode, ct) as ITypeSymbol;
+                    }
+                }
+
+                if (typeSymbol is IArrayTypeSymbol arrayType)
+                {
+                    typeSymbol = arrayType.ElementType;
+                }
+
+                if (typeSymbol is INamedTypeSymbol namedType)
+                {
+                    return BuildExplorationResult(namedType, options);
+                }
+            }
+        }
+
+        return null;
+    }
+
     private static TypeExplorationResult BuildExplorationResult(INamedTypeSymbol type, ExploreOptions options)
     {
+        if (type.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T &&
+            type.TypeArguments.Length == 1 &&
+            type.TypeArguments[0] is INamedTypeSymbol underlyingValueType)
+        {
+            type = underlyingValueType;
+        }
+        else if (type.NullableAnnotation == NullableAnnotation.Annotated)
+        {
+            type = (INamedTypeSymbol)type.WithNullableAnnotation(NullableAnnotation.NotAnnotated);
+        }
+
         var members = new List<TypeMemberInfo>();
 
         var allMembers = options.NoInherited
@@ -267,11 +436,21 @@ public sealed class RoslynTypeExplorer : ITypeExplorer
 
     public static string NormalizeTypeNameForMetadata(string typeName)
     {
-        if (!typeName.Contains('<')) return typeName;
+        var openIdx = typeName.IndexOf('<');
+        var closeIdx = typeName.LastIndexOf('>');
+        if (openIdx < 0 || closeIdx <= openIdx) return typeName;
 
-        var baseName = typeName[..typeName.IndexOf('<', StringComparison.Ordinal)];
-        var genericPart = typeName[(typeName.IndexOf('<', StringComparison.Ordinal) + 1)..typeName.LastIndexOf('>')];
-        var argCount = genericPart.Count(c => c == ',') + 1;
+        var baseName = typeName[..openIdx];
+        var genericPart = typeName[(openIdx + 1)..closeIdx];
+        int argCount = 1;
+        int depth = 0;
+        for (int i = 0; i < genericPart.Length; i++)
+        {
+            char c = genericPart[i];
+            if (c == '<') depth++;
+            else if (c == '>' && depth > 0) depth--;
+            else if (c == ',' && depth == 0) argCount++;
+        }
 
         return $"{baseName}`{argCount}";
     }

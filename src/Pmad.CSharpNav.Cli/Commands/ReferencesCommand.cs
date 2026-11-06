@@ -22,7 +22,9 @@ public static class ReferencesCommand
         var offsetOption = new Option<int>("--offset") { Description = "Offset for pagination", DefaultValueFactory = _ => 0 };
 
         var cmd = new Command("references", "Find references to a symbol or source location");
+        cmd.Aliases.Add("reference");
         cmd.Aliases.Add("refs");
+        cmd.Aliases.Add("ref");
         cmd.Aliases.Add("find-refs");
 
         cmd.Add(symbolOption);

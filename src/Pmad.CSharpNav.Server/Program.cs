@@ -224,11 +224,11 @@ lifetime.ApplicationStarted.Register(() =>
                 uri.Port,
                 securityOptions.ExpectedToken);
 
-            Console.WriteLine($"[csnav] Daemon started on port {uri.Port} for {solutionPath}");
+            Console.Error.WriteLine($"[csnav] Daemon started on port {uri.Port} for {solutionPath}");
 
             await workspace.InitializeAsync();
             watcher.Start();
-            Console.WriteLine($"[csnav] Workspace initialized and file watcher active.");
+            Console.Error.WriteLine($"[csnav] Workspace initialized and file watcher active.");
         }
         catch (Exception ex)
         {
@@ -242,7 +242,7 @@ lifetime.ApplicationStopping.Register(() =>
     watcher.Dispose();
     NavDiscovery.DeleteDiscoveryFile(solutionPath);
     workspace.Dispose();
-    Console.WriteLine("[csnav] Daemon stopped.");
+    Console.Error.WriteLine("[csnav] Daemon stopped.");
 });
 
 await app.RunAsync();

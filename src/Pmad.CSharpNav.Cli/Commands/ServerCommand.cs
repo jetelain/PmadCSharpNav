@@ -109,11 +109,16 @@ public static class ServerCommand
         stopCmd.SetAction(async (parseResult, ct) =>
         {
             var specifiedSolution = parseResult.GetValue(globals.SolutionOption);
+            var format = parseResult.GetValue(globals.FormatOption) ?? GlobalOptions.GetDefaultFormat();
             try
             {
                 var solutionPath = NavDaemonClient.ResolveSolutionPath(specifiedSolution);
                 var stopped = await client.StopDaemonAsync(solutionPath, ct);
-                if (stopped)
+                if (format.Equals("json", StringComparison.OrdinalIgnoreCase))
+                {
+                    Console.WriteLine(stopped ? "{\"status\":\"stopped\"}" : "{\"status\":\"not_running\"}");
+                }
+                else if (stopped)
                 {
                     Console.WriteLine("Server stopped.");
                 }
@@ -134,11 +139,19 @@ public static class ServerCommand
         reloadCmd.SetAction(async (parseResult, ct) =>
         {
             var specifiedSolution = parseResult.GetValue(globals.SolutionOption);
+            var format = parseResult.GetValue(globals.FormatOption) ?? GlobalOptions.GetDefaultFormat();
             try
             {
                 var solutionPath = NavDaemonClient.ResolveSolutionPath(specifiedSolution);
                 await client.ReloadSolutionAsync(solutionPath, ct);
-                Console.WriteLine("Solution workspace reloaded successfully.");
+                if (format.Equals("json", StringComparison.OrdinalIgnoreCase))
+                {
+                    Console.WriteLine("{\"status\":\"reloaded\"}");
+                }
+                else
+                {
+                    Console.WriteLine("Solution workspace reloaded successfully.");
+                }
                 return 0;
             }
             catch (Exception ex)

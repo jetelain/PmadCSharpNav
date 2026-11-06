@@ -95,7 +95,8 @@ public sealed class FindReferencesHandler
                 Kind: r.Kind.ToString(),
                 ContainingMember: r.ContainingMember,
                 IsGenerated: r.IsGenerated,
-                Snippet: r.Snippet))
+                Snippet: r.Snippet,
+                ContainingType: r.ContainingType))
             .ToList();
 
         var total = allReferences.Count;

@@ -28,7 +28,8 @@ public sealed record ReferenceItemDto(
     string Kind,
     string? ContainingMember = null,
     bool IsGenerated = false,
-    string? Snippet = null);
+    string? Snippet = null,
+    string? ContainingType = null);
 
 public sealed record FindReferencesResponse(
     ReferenceTargetDto Target,
