@@ -37,7 +37,7 @@ internal static class WindowsProcessLauncher
             using var processClass = new ManagementClass("Win32_Process");
             using var inParams = processClass.GetMethodParameters("Create");
             inParams["CommandLine"] = commandLine;
-            if (!string.IsNullOrWhiteSpace(currentDirectory))
+            if (!string.IsNullOrWhiteSpace(currentDirectory) && Directory.Exists(currentDirectory))
             {
                 inParams["CurrentDirectory"] = currentDirectory;
             }

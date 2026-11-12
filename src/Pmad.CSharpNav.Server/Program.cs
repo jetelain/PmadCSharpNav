@@ -54,12 +54,17 @@ if (string.IsNullOrWhiteSpace(solutionPath))
 
     if (solutionPath == null)
     {
-        Console.Error.WriteLine("Error: No solution or project file specified and none found in the current directory.");
+        SafeConsoleError("Error: No solution or project file specified and none found in the current directory.");
         return 1;
     }
 }
 
 solutionPath = Path.GetFullPath(solutionPath);
+if (!File.Exists(solutionPath))
+{
+    SafeConsoleError($"Error: Solution or project file not found: {solutionPath}");
+    return 1;
+}
 
 // Configure structured rolling file logging under user logs directory
 var logFilePath = NavDiscovery.GetLogFilePath(solutionPath);
@@ -282,8 +287,17 @@ lifetime.ApplicationStopping.Register(() =>
     Program.LogDaemonStopped(app.Logger);
 });
 
-await app.RunAsync();
-return 0;
+try
+{
+    await app.RunAsync();
+    return 0;
+}
+catch (Exception ex)
+{
+    SafeConsoleError($"[csnav] Daemon terminated unexpectedly: {ex.Message}");
+    Program.LogDaemonTerminatedUnexpectedly(app.Logger, ex, ex.Message);
+    return 1;
+}
 
 public partial class Program
 {
@@ -298,6 +312,9 @@ public partial class Program
 
     [LoggerMessage(EventId = 13, Level = LogLevel.Information, Message = "Daemon stopped.")]
     public static partial void LogDaemonStopped(ILogger logger);
+
+    [LoggerMessage(EventId = 14, Level = LogLevel.Error, Message = "Daemon terminated unexpectedly: {message}")]
+    public static partial void LogDaemonTerminatedUnexpectedly(ILogger logger, Exception ex, string message);
 }
 
 sealed class FileLoggerProvider : ILoggerProvider

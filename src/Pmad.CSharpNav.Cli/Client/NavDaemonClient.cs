@@ -48,9 +48,16 @@ public sealed class NavDaemonClient : IDisposable
     }
 
     public Task<DiscoveryInfo> EnsureDaemonRunningAsync(string solutionPath, CancellationToken ct = default)
-        => EnsureDaemonRunningAsync(solutionPath, Console.Error, ct);
+        => EnsureDaemonRunningAsync(solutionPath, Console.Error, allowWmi: true, ct);
 
-    public async Task<DiscoveryInfo> EnsureDaemonRunningAsync(string solutionPath, TextWriter? progress, CancellationToken ct = default)
+    public Task<DiscoveryInfo> EnsureDaemonRunningAsync(string solutionPath, TextWriter? progress, CancellationToken ct = default)
+        => EnsureDaemonRunningAsync(solutionPath, progress, allowWmi: true, ct);
+
+    internal async Task<DiscoveryInfo> EnsureDaemonRunningAsync(
+        string solutionPath,
+        TextWriter? progress,
+        bool allowWmi,
+        CancellationToken ct = default)
     {
         var fullPath = Path.GetFullPath(solutionPath);
 
@@ -93,7 +100,7 @@ public sealed class NavDaemonClient : IDisposable
         {
             await progress.WriteLineAsync($"[csnav] Starting background daemon for {Path.GetFileName(fullPath)}...");
         }
-        using var serverProcess = StartBackgroundServer(fullPath);
+        using var serverProcess = StartBackgroundServer(fullPath, allowWmi, out var hasRedirectedError);
         try
         {
             // Poll health endpoint
@@ -102,25 +109,25 @@ public sealed class NavDaemonClient : IDisposable
             {
                 await Task.Delay(250, ct);
 
-                if (serverProcess != null && serverProcess.HasExited)
+                if (serverProcess != null && HasProcessExited(serverProcess))
                 {
-                    string? errorDetail = null;
-                    try
-                    {
-                        using var readCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                        readCts.CancelAfter(TimeSpan.FromSeconds(2));
-                        errorDetail = await serverProcess.StandardError.ReadToEndAsync(readCts.Token);
-                    }
-                    catch
-                    {
-                    }
+                    var errorDetail = hasRedirectedError
+                        ? await TryReadStandardErrorAsync(serverProcess, ct)
+                        : null;
+                    var hasExitCode = TryGetExitCode(serverProcess, out var exitCode);
 
                     if (!string.IsNullOrWhiteSpace(errorDetail))
                     {
-                        throw new InvalidOperationException($"csnav daemon exited prematurely with code {serverProcess.ExitCode}: {errorDetail.Trim()}");
+                        throw new InvalidOperationException(
+                            hasExitCode
+                                ? $"csnav daemon exited prematurely with code {exitCode}: {errorDetail}"
+                                : $"csnav daemon exited prematurely: {errorDetail}");
                     }
 
-                    throw new InvalidOperationException($"csnav daemon exited prematurely with code {serverProcess.ExitCode}.");
+                    throw new InvalidOperationException(
+                        hasExitCode
+                            ? $"csnav daemon exited prematurely with code {exitCode}."
+                            : "csnav daemon exited prematurely.");
                 }
 
                 info = await NavDiscovery.ReadDiscoveryFileAsync(fullPath, ct);
@@ -138,7 +145,7 @@ public sealed class NavDaemonClient : IDisposable
         }
         finally
         {
-            if (serverProcess != null)
+            if (serverProcess != null && hasRedirectedError)
             {
                 try
                 {
@@ -345,28 +352,91 @@ public sealed class NavDaemonClient : IDisposable
         }
     }
 
-    internal static Process? StartBackgroundServer(string solutionPath, bool allowWmi = true)
+    private static bool HasProcessExited(Process process)
     {
+        try
+        {
+            return process.HasExited;
+        }
+        catch
+        {
+            return true;
+        }
+    }
+
+    private static bool TryGetExitCode(Process process, out int exitCode)
+    {
+        try
+        {
+            exitCode = process.ExitCode;
+            return true;
+        }
+        catch
+        {
+            exitCode = 0;
+            return false;
+        }
+    }
+
+    private static async Task<string?> TryReadStandardErrorAsync(Process serverProcess, CancellationToken ct)
+    {
+        var sb = new StringBuilder();
+        try
+        {
+            using var readCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            readCts.CancelAfter(TimeSpan.FromSeconds(2));
+            var buffer = new char[1024];
+            while (sb.Length < 8192)
+            {
+                var read = await serverProcess.StandardError
+                    .ReadAsync(buffer.AsMemory(), readCts.Token)
+                    .ConfigureAwait(false);
+                if (read == 0)
+                {
+                    break;
+                }
+                sb.Append(buffer, 0, read);
+            }
+        }
+        catch
+        {
+            // Return whatever was captured before timeout or error
+        }
+
+        return sb.Length > 0 ? sb.ToString().Trim() : null;
+    }
+
+    internal static Process? StartBackgroundServer(string solutionPath, bool allowWmi = true)
+        => StartBackgroundServer(solutionPath, allowWmi, out _);
+
+    internal static Process? StartBackgroundServer(string solutionPath, bool allowWmi, out bool hasRedirectedError)
+    {
+        hasRedirectedError = false;
         var serverAssembly = FindServerAssembly();
         var dotnetHost = FindDotNetHost();
         var arguments = $"\"{serverAssembly}\" --solution \"{solutionPath}\"";
+        var workingDir = Path.GetDirectoryName(solutionPath);
 
         if (OperatingSystem.IsWindows() &&
             allowWmi &&
             !string.Equals(Environment.GetEnvironmentVariable("CSNAV_DISABLE_WMI"), "1", StringComparison.Ordinal))
         {
             var commandLine = $"\"{dotnetHost}\" {arguments}";
-            var workingDir = Path.GetDirectoryName(solutionPath);
             if (WindowsProcessLauncher.TryStartViaWmi(commandLine, workingDir, out var pid))
             {
                 if (pid > 0)
                 {
+                    Process? wmiProcess = null;
                     try
                     {
-                        return Process.GetProcessById(pid);
+                        wmiProcess = Process.GetProcessById(pid);
+                        _ = wmiProcess.SafeHandle;
+                        return wmiProcess;
                     }
                     catch
                     {
+                        wmiProcess?.Dispose();
+                        throw new InvalidOperationException($"csnav daemon (PID {pid}) exited prematurely.");
                     }
                 }
                 return null;
@@ -377,6 +447,7 @@ public sealed class NavDaemonClient : IDisposable
         {
             FileName = dotnetHost,
             Arguments = arguments,
+            WorkingDirectory = !string.IsNullOrWhiteSpace(workingDir) && Directory.Exists(workingDir) ? workingDir : string.Empty,
             UseShellExecute = false,
             CreateNoWindow = true,
             WindowStyle = ProcessWindowStyle.Hidden,
@@ -396,6 +467,7 @@ public sealed class NavDaemonClient : IDisposable
 
         if (process != null)
         {
+            hasRedirectedError = true;
             try
             {
                 process.StandardInput.Close();

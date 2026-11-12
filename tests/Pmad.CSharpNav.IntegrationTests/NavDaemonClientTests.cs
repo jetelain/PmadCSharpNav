@@ -191,10 +191,43 @@ public sealed class NavDaemonClientTests : IDisposable
             proc!.StartInfo.RedirectStandardOutput.Should().BeTrue();
             proc.StartInfo.RedirectStandardError.Should().BeTrue();
             proc.StartInfo.RedirectStandardInput.Should().BeTrue();
+            proc.StartInfo.WorkingDirectory.Should().Be(_tempDir);
         }
         finally
         {
             KillAndDisposeProcessSafe(proc);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task EnsureDaemonRunningAsync_WhenDaemonExitsPrematurely_ThrowsInvalidOperationException(bool allowWmi)
+    {
+        var missingSolutionPath = Path.Combine(_tempDir, "NonExistentSolution.sln");
+        using var client = new NavDaemonClient();
+        using var progress = new StringWriter();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+        try
+        {
+            Func<Task> act = () => client.EnsureDaemonRunningAsync(missingSolutionPath, progress, allowWmi, cts.Token);
+            var assertion = await act.Should().ThrowAsync<InvalidOperationException>();
+            assertion.Which.Message.Should().Contain("exited prematurely");
+
+            if (!allowWmi)
+            {
+                assertion.Which.Message.Should().Contain("Error: Solution or project file not found");
+            }
+        }
+        finally
+        {
+            NavDiscovery.DeleteDiscoveryFile(missingSolutionPath);
+            var lockFile = NavDiscovery.GetLockFilePath(missingSolutionPath);
+            if (File.Exists(lockFile))
+            {
+                File.Delete(lockFile);
+            }
         }
     }
 
@@ -278,6 +311,7 @@ public sealed class NavDaemonClientTests : IDisposable
             if (!proc.HasExited)
             {
                 proc.Kill(entireProcessTree: true);
+                proc.WaitForExit(5000);
             }
         }
         catch
@@ -297,6 +331,7 @@ public sealed class NavDaemonClientTests : IDisposable
             if (!proc.HasExited)
             {
                 proc.Kill(entireProcessTree: true);
+                proc.WaitForExit(5000);
             }
         }
         catch
