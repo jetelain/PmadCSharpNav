@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -208,6 +209,38 @@ app.MapPost("/api/shutdown", (IHostApplicationLifetime lifetime) =>
 var lifetime = app.Services.GetRequiredService<IHostApplicationLifetime>();
 var watcher = new DebouncedFileWatcher(Path.GetDirectoryName(solutionPath)!, workspace);
 
+// On POSIX systems, ignore SIGHUP so closing the invoking terminal or container session does not kill the daemon
+using PosixSignalRegistration? sighupRegistration = RegisterSighupHandler();
+
+static PosixSignalRegistration? RegisterSighupHandler()
+{
+    if (!OperatingSystem.IsWindows())
+    {
+        try
+        {
+            return PosixSignalRegistration.Create(PosixSignal.SIGHUP, ctx => ctx.Cancel = true);
+        }
+        catch
+        {
+            // Best effort: some restricted container environments may disallow signal registration
+        }
+    }
+
+    return null;
+}
+
+static void SafeConsoleError(string message)
+{
+    try
+    {
+        Console.Error.WriteLine(message);
+    }
+    catch
+    {
+        // Safe to ignore if console stream is closed, broken, or redirected in background daemon
+    }
+}
+
 lifetime.ApplicationStarted.Register(() =>
 {
     var serverAddressesFeature = app.Urls;
@@ -224,15 +257,18 @@ lifetime.ApplicationStarted.Register(() =>
                 uri.Port,
                 securityOptions.ExpectedToken);
 
-            Console.Error.WriteLine($"[csnav] Daemon started on port {uri.Port} for {solutionPath}");
+            SafeConsoleError($"[csnav] Daemon started on port {uri.Port} for {solutionPath}");
+            Program.LogDaemonStarted(app.Logger, uri.Port, solutionPath);
 
             await workspace.InitializeAsync();
             watcher.Start();
-            Console.Error.WriteLine($"[csnav] Workspace initialized and file watcher active.");
+            SafeConsoleError($"[csnav] Workspace initialized and file watcher active.");
+            Program.LogWorkspaceInitialized(app.Logger);
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[csnav] Failed to initialize workspace: {ex.Message}");
+            SafeConsoleError($"[csnav] Failed to initialize workspace: {ex.Message}");
+            Program.LogWorkspaceInitFailed(app.Logger, ex, ex.Message);
         }
     });
 });
@@ -242,13 +278,27 @@ lifetime.ApplicationStopping.Register(() =>
     watcher.Dispose();
     NavDiscovery.DeleteDiscoveryFile(solutionPath);
     workspace.Dispose();
-    Console.Error.WriteLine("[csnav] Daemon stopped.");
+    SafeConsoleError("[csnav] Daemon stopped.");
+    Program.LogDaemonStopped(app.Logger);
 });
 
 await app.RunAsync();
 return 0;
 
-public partial class Program { }
+public partial class Program
+{
+    [LoggerMessage(EventId = 10, Level = LogLevel.Information, Message = "Daemon started on port {port} for {solutionPath}")]
+    public static partial void LogDaemonStarted(ILogger logger, int port, string solutionPath);
+
+    [LoggerMessage(EventId = 11, Level = LogLevel.Information, Message = "Workspace initialized and file watcher active.")]
+    public static partial void LogWorkspaceInitialized(ILogger logger);
+
+    [LoggerMessage(EventId = 12, Level = LogLevel.Error, Message = "Failed to initialize workspace: {message}")]
+    public static partial void LogWorkspaceInitFailed(ILogger logger, Exception ex, string message);
+
+    [LoggerMessage(EventId = 13, Level = LogLevel.Information, Message = "Daemon stopped.")]
+    public static partial void LogDaemonStopped(ILogger logger);
+}
 
 sealed class FileLoggerProvider : ILoggerProvider
 {

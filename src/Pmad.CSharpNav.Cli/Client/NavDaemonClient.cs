@@ -7,6 +7,7 @@ namespace Pmad.CSharpNav.Cli.Client;
 
 public sealed class NavDaemonClient : IDisposable
 {
+    private static readonly object s_processStartLock = new();
     private readonly HttpClient _httpClient = new();
     private bool _isDisposed;
 
@@ -92,26 +93,62 @@ public sealed class NavDaemonClient : IDisposable
         {
             await progress.WriteLineAsync($"[csnav] Starting background daemon for {Path.GetFileName(fullPath)}...");
         }
-        StartBackgroundServer(fullPath);
-
-        // Poll health endpoint
-        var stopwatch = Stopwatch.StartNew();
-        while (stopwatch.Elapsed < TimeSpan.FromSeconds(20))
+        using var serverProcess = StartBackgroundServer(fullPath);
+        try
         {
-            await Task.Delay(250, ct);
-
-            info = await NavDiscovery.ReadDiscoveryFileAsync(fullPath, ct);
-            if (info != null && await PingHealthAsync(info, ct))
+            // Poll health endpoint
+            var stopwatch = Stopwatch.StartNew();
+            while (stopwatch.Elapsed < TimeSpan.FromSeconds(20))
             {
-                if (progress != null)
+                await Task.Delay(250, ct);
+
+                if (serverProcess != null && serverProcess.HasExited)
                 {
-                    await progress.WriteLineAsync($"[csnav] Daemon ready on port {info.Port}.");
+                    string? errorDetail = null;
+                    try
+                    {
+                        using var readCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                        readCts.CancelAfter(TimeSpan.FromSeconds(2));
+                        errorDetail = await serverProcess.StandardError.ReadToEndAsync(readCts.Token);
+                    }
+                    catch
+                    {
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(errorDetail))
+                    {
+                        throw new InvalidOperationException($"csnav daemon exited prematurely with code {serverProcess.ExitCode}: {errorDetail.Trim()}");
+                    }
+
+                    throw new InvalidOperationException($"csnav daemon exited prematurely with code {serverProcess.ExitCode}.");
                 }
-                return info;
+
+                info = await NavDiscovery.ReadDiscoveryFileAsync(fullPath, ct);
+                if (info != null && await PingHealthAsync(info, ct))
+                {
+                    if (progress != null)
+                    {
+                        await progress.WriteLineAsync($"[csnav] Daemon ready on port {info.Port}.");
+                    }
+                    return info;
+                }
+            }
+
+            throw new TimeoutException("Failed to communicate with csnav daemon within 20 seconds.");
+        }
+        finally
+        {
+            if (serverProcess != null)
+            {
+                try
+                {
+                    serverProcess.StandardError.Close();
+                }
+                catch
+                {
+                }
             }
         }
-
-        throw new TimeoutException("Failed to communicate with csnav daemon within 20 seconds.");
     }
 
     public Task<DiscoveryInfo> EnsureStartedAsync(string solutionPath, CancellationToken ct = default)
@@ -299,7 +336,7 @@ public sealed class NavDaemonClient : IDisposable
     {
         try
         {
-            var proc = Process.GetProcessById(pid);
+            using var proc = Process.GetProcessById(pid);
             return !proc.HasExited;
         }
         catch
@@ -308,19 +345,31 @@ public sealed class NavDaemonClient : IDisposable
         }
     }
 
-    private static void StartBackgroundServer(string solutionPath)
+    internal static Process? StartBackgroundServer(string solutionPath, bool allowWmi = true)
     {
         var serverAssembly = FindServerAssembly();
         var dotnetHost = FindDotNetHost();
         var arguments = $"\"{serverAssembly}\" --solution \"{solutionPath}\"";
 
-        if (OperatingSystem.IsWindows())
+        if (OperatingSystem.IsWindows() &&
+            allowWmi &&
+            !string.Equals(Environment.GetEnvironmentVariable("CSNAV_DISABLE_WMI"), "1", StringComparison.Ordinal))
         {
             var commandLine = $"\"{dotnetHost}\" {arguments}";
             var workingDir = Path.GetDirectoryName(solutionPath);
-            if (WindowsProcessLauncher.TryStartViaWmi(commandLine, workingDir))
+            if (WindowsProcessLauncher.TryStartViaWmi(commandLine, workingDir, out var pid))
             {
-                return;
+                if (pid > 0)
+                {
+                    try
+                    {
+                        return Process.GetProcessById(pid);
+                    }
+                    catch
+                    {
+                    }
+                }
+                return null;
             }
         }
 
@@ -331,11 +380,40 @@ public sealed class NavDaemonClient : IDisposable
             UseShellExecute = false,
             CreateNoWindow = true,
             WindowStyle = ProcessWindowStyle.Hidden,
-            RedirectStandardOutput = false,
-            RedirectStandardError = false
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
         };
 
-        Process.Start(psi);
+        Process? process;
+        lock (s_processStartLock)
+        {
+            using var inheritanceScope = OperatingSystem.IsWindows()
+                ? WindowsProcessLauncher.SuppressStandardHandleInheritance()
+                : null;
+            process = Process.Start(psi);
+        }
+
+        if (process != null)
+        {
+            try
+            {
+                process.StandardInput.Close();
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                process.StandardOutput.Close();
+            }
+            catch
+            {
+            }
+        }
+
+        return process;
     }
 
     private static string FindDotNetHost()
