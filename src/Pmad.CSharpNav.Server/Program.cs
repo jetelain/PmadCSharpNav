@@ -66,6 +66,13 @@ if (!File.Exists(solutionPath))
     return 1;
 }
 
+var solutionExt = Path.GetExtension(solutionPath).ToLowerInvariant();
+if (solutionExt is not (".sln" or ".slnx" or ".csproj"))
+{
+    SafeConsoleError($"Error: Target path extension '{solutionExt}' is not supported. Use .sln, .slnx, or .csproj.");
+    return 1;
+}
+
 // Configure structured rolling file logging under user logs directory
 var logFilePath = NavDiscovery.GetLogFilePath(solutionPath);
 builder.Logging.ClearProviders();

@@ -234,6 +234,51 @@ public sealed class NavDaemonClientTests : IDisposable
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task EnsureDaemonRunningAsync_WhenSolutionExtensionUnsupported_ThrowsInvalidOperationException(bool allowWmi)
+    {
+        var unsupportedFile = Path.Combine(_tempDir, "Unsupported.txt");
+        File.WriteAllText(unsupportedFile, "not a solution");
+        using var client = new NavDaemonClient();
+        using var progress = new StringWriter();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+        try
+        {
+            Func<Task> act = () => client.EnsureDaemonRunningAsync(unsupportedFile, progress, allowWmi, cts.Token);
+            var assertion = await act.Should().ThrowAsync<InvalidOperationException>();
+            assertion.Which.Message.Should().Contain("exited prematurely");
+
+            if (!allowWmi)
+            {
+                assertion.Which.Message.Should().Contain("not supported. Use .sln, .slnx, or .csproj");
+            }
+        }
+        finally
+        {
+            NavDiscovery.DeleteDiscoveryFile(unsupportedFile);
+            var lockFile = NavDiscovery.GetLockFilePath(unsupportedFile);
+            if (File.Exists(lockFile))
+            {
+                File.Delete(lockFile);
+            }
+        }
+    }
+
+    [Fact]
+    public void SuppressStandardHandleInheritance_RestoresHandleInheritanceOnDispose()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var scope = WindowsProcessLauncher.SuppressStandardHandleInheritance();
+        scope.Should().NotBeNull();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task CliServerStart_DoesNotLeakStandardStreamHandlesToDaemon(bool disableWmi)
     {
         var cliAssembly = Path.Combine(AppContext.BaseDirectory, "Pmad.CSharpNav.Cli.dll");

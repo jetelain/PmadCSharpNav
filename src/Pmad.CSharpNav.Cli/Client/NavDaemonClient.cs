@@ -398,9 +398,13 @@ public sealed class NavDaemonClient : IDisposable
                 sb.Append(buffer, 0, read);
             }
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
         catch
         {
-            // Return whatever was captured before timeout or error
+            // Return whatever was captured before read timeout or stream error
         }
 
         return sb.Length > 0 ? sb.ToString().Trim() : null;
