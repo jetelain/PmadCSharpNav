@@ -7,6 +7,7 @@ namespace Pmad.CSharpNav.Cli.Client;
 
 public sealed class NavDaemonClient : IDisposable
 {
+    private static readonly object s_processStartLock = new();
     private readonly HttpClient _httpClient = new();
     private bool _isDisposed;
 
@@ -47,9 +48,16 @@ public sealed class NavDaemonClient : IDisposable
     }
 
     public Task<DiscoveryInfo> EnsureDaemonRunningAsync(string solutionPath, CancellationToken ct = default)
-        => EnsureDaemonRunningAsync(solutionPath, Console.Error, ct);
+        => EnsureDaemonRunningAsync(solutionPath, Console.Error, allowWmi: true, ct);
 
-    public async Task<DiscoveryInfo> EnsureDaemonRunningAsync(string solutionPath, TextWriter? progress, CancellationToken ct = default)
+    public Task<DiscoveryInfo> EnsureDaemonRunningAsync(string solutionPath, TextWriter? progress, CancellationToken ct = default)
+        => EnsureDaemonRunningAsync(solutionPath, progress, allowWmi: true, ct);
+
+    internal async Task<DiscoveryInfo> EnsureDaemonRunningAsync(
+        string solutionPath,
+        TextWriter? progress,
+        bool allowWmi,
+        CancellationToken ct = default)
     {
         var fullPath = Path.GetFullPath(solutionPath);
 
@@ -92,26 +100,62 @@ public sealed class NavDaemonClient : IDisposable
         {
             await progress.WriteLineAsync($"[csnav] Starting background daemon for {Path.GetFileName(fullPath)}...");
         }
-        StartBackgroundServer(fullPath);
-
-        // Poll health endpoint
-        var stopwatch = Stopwatch.StartNew();
-        while (stopwatch.Elapsed < TimeSpan.FromSeconds(20))
+        using var serverProcess = StartBackgroundServer(fullPath, allowWmi, out var hasRedirectedError);
+        try
         {
-            await Task.Delay(250, ct);
-
-            info = await NavDiscovery.ReadDiscoveryFileAsync(fullPath, ct);
-            if (info != null && await PingHealthAsync(info, ct))
+            // Poll health endpoint
+            var stopwatch = Stopwatch.StartNew();
+            while (stopwatch.Elapsed < TimeSpan.FromSeconds(20))
             {
-                if (progress != null)
+                await Task.Delay(250, ct);
+
+                if (serverProcess != null && HasProcessExited(serverProcess))
                 {
-                    await progress.WriteLineAsync($"[csnav] Daemon ready on port {info.Port}.");
+                    var errorDetail = hasRedirectedError
+                        ? await TryReadStandardErrorAsync(serverProcess, ct)
+                        : null;
+                    var hasExitCode = TryGetExitCode(serverProcess, out var exitCode);
+
+                    if (!string.IsNullOrWhiteSpace(errorDetail))
+                    {
+                        throw new InvalidOperationException(
+                            hasExitCode
+                                ? $"csnav daemon exited prematurely with code {exitCode}: {errorDetail}"
+                                : $"csnav daemon exited prematurely: {errorDetail}");
+                    }
+
+                    throw new InvalidOperationException(
+                        hasExitCode
+                            ? $"csnav daemon exited prematurely with code {exitCode}."
+                            : "csnav daemon exited prematurely.");
                 }
-                return info;
+
+                info = await NavDiscovery.ReadDiscoveryFileAsync(fullPath, ct);
+                if (info != null && await PingHealthAsync(info, ct))
+                {
+                    if (progress != null)
+                    {
+                        await progress.WriteLineAsync($"[csnav] Daemon ready on port {info.Port}.");
+                    }
+                    return info;
+                }
+            }
+
+            throw new TimeoutException("Failed to communicate with csnav daemon within 20 seconds.");
+        }
+        finally
+        {
+            if (serverProcess != null && hasRedirectedError)
+            {
+                try
+                {
+                    serverProcess.StandardError.Close();
+                }
+                catch
+                {
+                }
             }
         }
-
-        throw new TimeoutException("Failed to communicate with csnav daemon within 20 seconds.");
     }
 
     public Task<DiscoveryInfo> EnsureStartedAsync(string solutionPath, CancellationToken ct = default)
@@ -299,7 +343,7 @@ public sealed class NavDaemonClient : IDisposable
     {
         try
         {
-            var proc = Process.GetProcessById(pid);
+            using var proc = Process.GetProcessById(pid);
             return !proc.HasExited;
         }
         catch
@@ -308,19 +352,98 @@ public sealed class NavDaemonClient : IDisposable
         }
     }
 
-    private static void StartBackgroundServer(string solutionPath)
+    private static bool HasProcessExited(Process process)
     {
+        try
+        {
+            return process.HasExited;
+        }
+        catch
+        {
+            return true;
+        }
+    }
+
+    private static bool TryGetExitCode(Process process, out int exitCode)
+    {
+        try
+        {
+            exitCode = process.ExitCode;
+            return true;
+        }
+        catch
+        {
+            exitCode = 0;
+            return false;
+        }
+    }
+
+    private static async Task<string?> TryReadStandardErrorAsync(Process serverProcess, CancellationToken ct)
+    {
+        var sb = new StringBuilder();
+        try
+        {
+            using var readCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            readCts.CancelAfter(TimeSpan.FromSeconds(2));
+            var buffer = new char[1024];
+            while (sb.Length < 8192)
+            {
+                var read = await serverProcess.StandardError
+                    .ReadAsync(buffer.AsMemory(), readCts.Token)
+                    .ConfigureAwait(false);
+                if (read == 0)
+                {
+                    break;
+                }
+                sb.Append(buffer, 0, read);
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            // Return whatever was captured before read timeout or stream error
+        }
+
+        return sb.Length > 0 ? sb.ToString().Trim() : null;
+    }
+
+    internal static Process? StartBackgroundServer(string solutionPath, bool allowWmi = true)
+        => StartBackgroundServer(solutionPath, allowWmi, out _);
+
+    internal static Process? StartBackgroundServer(string solutionPath, bool allowWmi, out bool hasRedirectedError)
+    {
+        hasRedirectedError = false;
         var serverAssembly = FindServerAssembly();
         var dotnetHost = FindDotNetHost();
         var arguments = $"\"{serverAssembly}\" --solution \"{solutionPath}\"";
+        var workingDir = Path.GetDirectoryName(solutionPath);
 
-        if (OperatingSystem.IsWindows())
+        if (OperatingSystem.IsWindows() &&
+            allowWmi &&
+            !string.Equals(Environment.GetEnvironmentVariable("CSNAV_DISABLE_WMI"), "1", StringComparison.Ordinal))
         {
             var commandLine = $"\"{dotnetHost}\" {arguments}";
-            var workingDir = Path.GetDirectoryName(solutionPath);
-            if (WindowsProcessLauncher.TryStartViaWmi(commandLine, workingDir))
+            if (WindowsProcessLauncher.TryStartViaWmi(commandLine, workingDir, out var pid))
             {
-                return;
+                if (pid > 0)
+                {
+                    Process? wmiProcess = null;
+                    try
+                    {
+                        wmiProcess = Process.GetProcessById(pid);
+                        _ = wmiProcess.SafeHandle;
+                        return wmiProcess;
+                    }
+                    catch
+                    {
+                        wmiProcess?.Dispose();
+                        throw new InvalidOperationException($"csnav daemon (PID {pid}) exited prematurely.");
+                    }
+                }
+                return null;
             }
         }
 
@@ -328,14 +451,45 @@ public sealed class NavDaemonClient : IDisposable
         {
             FileName = dotnetHost,
             Arguments = arguments,
+            WorkingDirectory = !string.IsNullOrWhiteSpace(workingDir) && Directory.Exists(workingDir) ? workingDir : string.Empty,
             UseShellExecute = false,
             CreateNoWindow = true,
             WindowStyle = ProcessWindowStyle.Hidden,
-            RedirectStandardOutput = false,
-            RedirectStandardError = false
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
         };
 
-        Process.Start(psi);
+        Process? process;
+        lock (s_processStartLock)
+        {
+            using var inheritanceScope = OperatingSystem.IsWindows()
+                ? WindowsProcessLauncher.SuppressStandardHandleInheritance()
+                : null;
+            process = Process.Start(psi);
+        }
+
+        if (process != null)
+        {
+            hasRedirectedError = true;
+            try
+            {
+                process.StandardInput.Close();
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                process.StandardOutput.Close();
+            }
+            catch
+            {
+            }
+        }
+
+        return process;
     }
 
     private static string FindDotNetHost()

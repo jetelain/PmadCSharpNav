@@ -152,8 +152,240 @@ public sealed class NavDaemonClientTests : IDisposable
             return;
         }
 
-        var success = WindowsProcessLauncher.TryStartViaWmi("powershell.exe -NoProfile -Command Start-Sleep -Milliseconds 100");
-        success.Should().BeTrue();
+        var success = WindowsProcessLauncher.TryStartViaWmi(
+            "powershell.exe -NoProfile -Command Start-Sleep -Milliseconds 100",
+            null,
+            out var pid);
+        try
+        {
+            success.Should().BeTrue();
+            pid.Should().BeGreaterThan(0);
+        }
+        finally
+        {
+            KillProcessSafe(pid);
+        }
+    }
+
+    [Fact]
+    public void StartBackgroundServer_SpawnsOrDelegates_WithoutThrowing()
+    {
+        var proc = NavDaemonClient.StartBackgroundServer(_solutionPath);
+        try
+        {
+            proc.Should().NotBeNull();
+        }
+        finally
+        {
+            KillAndDisposeProcessSafe(proc);
+        }
+    }
+
+    [Fact]
+    public void StartBackgroundServer_WithoutWmi_RedirectsStandardStreams()
+    {
+        var proc = NavDaemonClient.StartBackgroundServer(_solutionPath, allowWmi: false);
+        try
+        {
+            proc.Should().NotBeNull();
+            proc!.StartInfo.RedirectStandardOutput.Should().BeTrue();
+            proc.StartInfo.RedirectStandardError.Should().BeTrue();
+            proc.StartInfo.RedirectStandardInput.Should().BeTrue();
+            proc.StartInfo.WorkingDirectory.Should().Be(_tempDir);
+        }
+        finally
+        {
+            KillAndDisposeProcessSafe(proc);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task EnsureDaemonRunningAsync_WhenDaemonExitsPrematurely_ThrowsInvalidOperationException(bool allowWmi)
+    {
+        var missingSolutionPath = Path.Combine(_tempDir, "NonExistentSolution.sln");
+        using var client = new NavDaemonClient();
+        using var progress = new StringWriter();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+        try
+        {
+            Func<Task> act = () => client.EnsureDaemonRunningAsync(missingSolutionPath, progress, allowWmi, cts.Token);
+            var assertion = await act.Should().ThrowAsync<InvalidOperationException>();
+            assertion.Which.Message.Should().Contain("exited prematurely");
+
+            if (!allowWmi)
+            {
+                assertion.Which.Message.Should().Contain("Error: Solution or project file not found");
+            }
+        }
+        finally
+        {
+            NavDiscovery.DeleteDiscoveryFile(missingSolutionPath);
+            var lockFile = NavDiscovery.GetLockFilePath(missingSolutionPath);
+            if (File.Exists(lockFile))
+            {
+                File.Delete(lockFile);
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task EnsureDaemonRunningAsync_WhenSolutionExtensionUnsupported_ThrowsInvalidOperationException(bool allowWmi)
+    {
+        var unsupportedFile = Path.Combine(_tempDir, "Unsupported.txt");
+        File.WriteAllText(unsupportedFile, "not a solution");
+        using var client = new NavDaemonClient();
+        using var progress = new StringWriter();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+        try
+        {
+            Func<Task> act = () => client.EnsureDaemonRunningAsync(unsupportedFile, progress, allowWmi, cts.Token);
+            var assertion = await act.Should().ThrowAsync<InvalidOperationException>();
+            assertion.Which.Message.Should().Contain("exited prematurely");
+
+            if (!allowWmi)
+            {
+                assertion.Which.Message.Should().Contain("not supported. Use .sln, .slnx, or .csproj");
+            }
+        }
+        finally
+        {
+            NavDiscovery.DeleteDiscoveryFile(unsupportedFile);
+            var lockFile = NavDiscovery.GetLockFilePath(unsupportedFile);
+            if (File.Exists(lockFile))
+            {
+                File.Delete(lockFile);
+            }
+        }
+    }
+
+    [Fact]
+    public void SuppressStandardHandleInheritance_RestoresHandleInheritanceOnDispose()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var scope = WindowsProcessLauncher.SuppressStandardHandleInheritance();
+        scope.Should().NotBeNull();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CliServerStart_DoesNotLeakStandardStreamHandlesToDaemon(bool disableWmi)
+    {
+        var cliAssembly = Path.Combine(AppContext.BaseDirectory, "Pmad.CSharpNav.Cli.dll");
+        File.Exists(cliAssembly).Should().BeTrue();
+
+        var psi = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "dotnet",
+            Arguments = $"\"{cliAssembly}\" server start --solution \"{_solutionPath}\" --format json",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+        psi.Environment["CSNAV_DISABLE_WMI"] = disableWmi ? "1" : "0";
+
+        int daemonPid = 0;
+        using var cliProc = System.Diagnostics.Process.Start(psi);
+        cliProc.Should().NotBeNull();
+
+        try
+        {
+            cliProc!.StandardInput.Close();
+
+            using var startupCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            var stdoutTask = cliProc.StandardOutput.ReadToEndAsync(startupCts.Token);
+            var stderrTask = cliProc.StandardError.ReadToEndAsync(startupCts.Token);
+
+            await cliProc.WaitForExitAsync(startupCts.Token);
+
+            // Once the CLI process exits, stdout and stderr must reach EOF immediately even though
+            // the background daemon is still alive. If the daemon inherited the CLI's pipe handles,
+            // awaiting stdoutTask / stderrTask here will time out after 3 seconds.
+            using var eofCts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+            var stdout = await stdoutTask.WaitAsync(eofCts.Token);
+            var stderr = await stderrTask.WaitAsync(eofCts.Token);
+
+            cliProc.ExitCode.Should().Be(0, because: $"stderr was: {stderr}");
+
+            var parsed = NavJsonSerializer.Deserialize<ServerStartResponse>(stdout.Trim());
+            parsed.Should().NotBeNull();
+            daemonPid = parsed!.Pid;
+            daemonPid.Should().BeGreaterThan(0);
+
+            using var daemonProc = System.Diagnostics.Process.GetProcessById(daemonPid);
+            daemonProc.HasExited.Should().BeFalse("daemon should still be running in the background after CLI exits and closes pipes");
+        }
+        finally
+        {
+            using var client = new NavDaemonClient();
+            try
+            {
+                await client.StopDaemonAsync(_solutionPath);
+            }
+            catch
+            {
+            }
+
+            KillProcessSafe(daemonPid);
+            KillAndDisposeProcessSafe(cliProc);
+        }
+    }
+
+    private static void KillProcessSafe(int pid)
+    {
+        if (pid <= 0)
+        {
+            return;
+        }
+
+        try
+        {
+            using var proc = System.Diagnostics.Process.GetProcessById(pid);
+            if (!proc.HasExited)
+            {
+                proc.Kill(entireProcessTree: true);
+                proc.WaitForExit(5000);
+            }
+        }
+        catch
+        {
+        }
+    }
+
+    private static void KillAndDisposeProcessSafe(System.Diagnostics.Process? proc)
+    {
+        if (proc == null)
+        {
+            return;
+        }
+
+        try
+        {
+            if (!proc.HasExited)
+            {
+                proc.Kill(entireProcessTree: true);
+                proc.WaitForExit(5000);
+            }
+        }
+        catch
+        {
+        }
+        finally
+        {
+            proc.Dispose();
+        }
     }
 
     public void Dispose()
